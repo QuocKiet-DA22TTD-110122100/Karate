@@ -6,6 +6,13 @@ dist
 # Local tool state
 .claude/settings.local.json
 .qodo
+.playwright-mcp/
+
+# Loose media at the repo root: screenshots and raw sound downloads. The bell
+# the app actually ships lives in public/ and is already tracked, so ignoring
+# these patterns leaves it untouched while keeping stray files out.
+*.png
+*.mp3
 
 # Real competitor rosters — personal data of minors, kept out of the repo
 *.pdf

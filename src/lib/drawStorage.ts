@@ -1,4 +1,4 @@
-import type { AthleteRecord, CategoryInfo } from '../types';
+import type { AthleteRecord, CategoryInfo, RosterEntry } from '../types';
 import type { BracketData } from './drawAlgorithm';
 import { categoryLabel } from './normalize';
 
@@ -13,6 +13,8 @@ export interface DrawState {
   allAthletes: AthleteRecord[];
   categories: CategoryInfo[];
   brackets: Record<string, BracketData>;
+  /** Per-class "waiting bench": athletes pulled out of the bracket. */
+  benches: Record<string, RosterEntry[]>;
   fileName: string;
 }
 

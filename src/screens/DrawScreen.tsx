@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useReducer, useMemo } from 'r
 import * as XLSX from 'xlsx';
 import type { RosterEntry, AthleteRecord, CategoryInfo } from '../types';
 import RosterTable, { FullRosterTable } from '../components/draw/RosterTable';
+import BenchPanel from '../components/draw/BenchPanel';
 import Bracket from '../components/draw/Bracket';
 import AddCategoryDialog from '../components/draw/AddCategoryDialog';
 import {
@@ -85,20 +86,56 @@ function buildRecords(sheets: Sheet[]): AthleteRecord[] {
   return out;
 }
 
+/**
+ * Rebuild the grouped weight classes from the flat roster.
+ *
+ * Editing an athlete's weight/age/gender changes which class they belong to, so
+ * every edit re-derives the grouping. Previously-seen classes are kept even when
+ * they end up empty — that preserves hand-added empty classes and any class an
+ * athlete was just moved out of, which the operator can delete by hand if unwanted.
+ */
+function regroupCategories(
+  athletes: AthleteRecord[],
+  prev: CategoryInfo[]
+): CategoryInfo[] {
+  const map = new Map<string, CategoryInfo>();
+  for (const c of prev) map.set(c.key, { ...c, athletes: [] });
+  for (const a of athletes) {
+    const key = categoryKey(a.category, a.ageGroup, a.gender);
+    let cat = map.get(key);
+    if (!cat) {
+      cat = { key, label: categoryLabel(a.category, a.ageGroup, a.gender), athletes: [] };
+      map.set(key, cat);
+    }
+    cat.athletes.push({ ...a });
+  }
+  return [...map.values()].map((c) => ({
+    ...c,
+    athletes: c.athletes.map((a, i) => ({ ...a, stt: i + 1 })),
+  }));
+}
+
 // --- Undo/redo history for the brackets -------------------------------------
 const HISTORY_LIMIT = 50;
 
+// One undo step covers both the brackets and the waiting benches, so pulling a
+// competitor to the bench (or dropping one back) is a single reversible action.
+interface DrawSnapshot {
+  brackets: Record<string, BracketData>;
+  benches: Record<string, RosterEntry[]>;
+}
+
 interface BracketHistory {
-  present: Record<string, BracketData>;
-  past: Record<string, BracketData>[];
-  future: Record<string, BracketData>[];
+  present: DrawSnapshot;
+  past: DrawSnapshot[];
+  future: DrawSnapshot[];
 }
 
 type BracketAction =
-  | { type: 'mutate'; fn: (prev: Record<string, BracketData>) => Record<string, BracketData> }
+  | { type: 'mutate'; fn: (prev: DrawSnapshot) => DrawSnapshot }
   | { type: 'undo' }
   | { type: 'redo' }
-  | { type: 'reset'; value: Record<string, BracketData> };
+  | { type: 'reset'; value: DrawSnapshot };
 
 function bracketReducer(state: BracketHistory, action: BracketAction): BracketHistory {
   switch (action.type) {
@@ -136,6 +173,17 @@ function bracketReducer(state: BracketHistory, action: BracketAction): BracketHi
   }
 }
 
+const sameAthlete = (a: RosterEntry, b: { name: string; unit: string }) =>
+  a.name.trim().toLowerCase() === b.name.trim().toLowerCase() &&
+  a.unit.trim().toLowerCase() === b.unit.trim().toLowerCase();
+
+// Append to a bench list without duplicating.
+function addToBench(list: RosterEntry[] | undefined, a: RosterEntry): RosterEntry[] {
+  const cur = list ?? [];
+  if (cur.some((x) => sameAthlete(x, a))) return cur;
+  return [...cur, { stt: cur.length + 1, name: a.name, unit: a.unit }];
+}
+
 // Fit a rendered bracket canvas centred on the current PDF page.
 function placeCanvasOnPage(pdf: jsPDF, canvas: HTMLCanvasElement): void {
   const pageW = pdf.internal.pageSize.getWidth();
@@ -168,9 +216,14 @@ export default function DrawScreen() {
   const [bracketHist, dispatch] = useReducer(
     bracketReducer,
     undefined,
-    (): BracketHistory => ({ present: loadDraw().brackets ?? {}, past: [], future: [] })
+    (): BracketHistory => {
+      const d = loadDraw();
+      return { present: { brackets: d.brackets ?? {}, benches: d.benches ?? {} }, past: [], future: [] };
+    }
   );
-  const brackets = bracketHist.present;
+  const brackets = bracketHist.present.brackets;
+  const benches = bracketHist.present.benches;
+  const bench = benches[activeKey] ?? [];
   const canUndo = bracketHist.past.length > 0;
   const canRedo = bracketHist.future.length > 0;
   const undo = useCallback(() => dispatch({ type: 'undo' }), []);
@@ -178,6 +231,7 @@ export default function DrawScreen() {
   const bracketData = brackets[activeKey] ?? null;
   const [editingRoster, setEditingRoster] = useState<RosterEntry[]>([]);
   const [isEditing, setIsEditing] = useState(false);
+  const [editingAll, setEditingAll] = useState(false);
   const [fileName, setFileName] = useState(() => loadDraw().fileName ?? '');
   const [showAll, setShowAll] = useState(true);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
@@ -201,11 +255,11 @@ export default function DrawScreen() {
   // Mirror the whole draw to localStorage (debounced) whenever it changes.
   useEffect(() => {
     const t = setTimeout(
-      () => saveDraw({ allAthletes, categories, brackets, fileName }),
+      () => saveDraw({ allAthletes, categories, brackets, benches, fileName }),
       300
     );
     return () => clearTimeout(t);
-  }, [allAthletes, categories, brackets, fileName]);
+  }, [allAthletes, categories, brackets, benches, fileName]);
 
   // Keyboard shortcuts for undo/redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y).
   useEffect(() => {
@@ -307,7 +361,7 @@ export default function DrawScreen() {
     setCategories([]);
     setActiveKey('');
     setEditingRoster([]);
-    dispatch({ type: 'reset', value: {} });
+    dispatch({ type: 'reset', value: { brackets: {}, benches: {} } });
     setFileName('');
   }, []);
 
@@ -418,59 +472,97 @@ export default function DrawScreen() {
     (posA: number, posB: number) => {
       dispatch({
         type: 'mutate',
-        fn: (b) => {
-          const cur = b[activeKey];
-          if (!cur) return b;
-          return { ...b, [activeKey]: swapSlots(cur, posA, posB) };
+        fn: (s) => {
+          const cur = s.brackets[activeKey];
+          if (!cur) return s;
+          return { ...s, brackets: { ...s.brackets, [activeKey]: swapSlots(cur, posA, posB) } };
         },
       });
     },
     [activeKey]
   );
 
-  // Remove an athlete from a slot (turns it into a bye).
+  // Remove an athlete from a slot → move them to the waiting bench.
   const handleClearSlot = useCallback(
     (pos: number) => {
       dispatch({
         type: 'mutate',
-        fn: (b) => {
-          const cur = b[activeKey];
-          if (!cur) return b;
-          return { ...b, [activeKey]: setSlotAthlete(cur, pos, null) };
+        fn: (s) => {
+          const cur = s.brackets[activeKey];
+          if (!cur) return s;
+          const removed = cur.slots.find((sl) => sl.position === pos)?.athlete ?? null;
+          return {
+            brackets: { ...s.brackets, [activeKey]: setSlotAthlete(cur, pos, null) },
+            benches: removed
+              ? { ...s.benches, [activeKey]: addToBench(s.benches[activeKey], removed) }
+              : s.benches,
+          };
         },
       });
     },
     [activeKey]
   );
 
-  // Edit / add an athlete's name + unit in a slot (inline edit or roster drop).
+  // Edit / add an athlete's name + unit in a slot (inline edit).
   const handleSetSlot = useCallback(
     (pos: number, name: string, unit: string) => {
       dispatch({
         type: 'mutate',
-        fn: (b) => {
-          const cur = b[activeKey];
-          if (!cur) return b;
+        fn: (s) => {
+          const cur = s.brackets[activeKey];
+          if (!cur) return s;
           const athlete = name.trim() ? { stt: pos, name: name.trim(), unit: unit.trim() } : null;
-          return { ...b, [activeKey]: setSlotAthlete(cur, pos, athlete) };
+          return { ...s, brackets: { ...s.brackets, [activeKey]: setSlotAthlete(cur, pos, athlete) } };
         },
       });
     },
     [activeKey]
   );
 
-  // Drop an athlete dragged in from the roster table onto a slot.
+  // Drop an athlete (from the roster table or the bench) onto a slot: place them,
+  // remove them from the bench, and push any displaced occupant to the bench.
   const handleDropAthlete = useCallback(
     (pos: number, name: string, unit: string) => {
       if (!name.trim()) return;
       dispatch({
         type: 'mutate',
-        fn: (b) => {
-          const cur = b[activeKey];
-          if (!cur) return b;
+        fn: (s) => {
+          const cur = s.brackets[activeKey];
+          if (!cur) return s;
           const athlete = { stt: pos, name: name.trim(), unit: unit.trim() };
-          return { ...b, [activeKey]: placeAthlete(cur, pos, athlete) };
+          const occupant = cur.slots.find((sl) => sl.position === pos)?.athlete ?? null;
+          let list = (s.benches[activeKey] ?? []).filter((a) => !sameAthlete(a, athlete));
+          if (occupant && !sameAthlete(occupant, athlete)) list = addToBench(list, occupant);
+          return {
+            brackets: { ...s.brackets, [activeKey]: placeAthlete(cur, pos, athlete) },
+            benches: { ...s.benches, [activeKey]: list },
+          };
         },
+      });
+    },
+    [activeKey]
+  );
+
+  // Pull an athlete out of the bracket to the bench by their slot position.
+  const handleBenchDrop = useCallback(
+    (pos: number) => handleClearSlot(pos),
+    [handleClearSlot]
+  );
+
+  // Permanently remove an athlete from the bench.
+  const handleBenchRemove = useCallback(
+    (name: string, unit: string) => {
+      dispatch({
+        type: 'mutate',
+        fn: (s) => ({
+          ...s,
+          benches: {
+            ...s.benches,
+            [activeKey]: (s.benches[activeKey] ?? []).filter(
+              (a) => !sameAthlete(a, { name, unit })
+            ),
+          },
+        }),
       });
     },
     [activeKey]
@@ -487,7 +579,13 @@ export default function DrawScreen() {
       return;
     }
     const data = generateBracket(cleaned, currentCategory.label);
-    dispatch({ type: 'mutate', fn: (b) => ({ ...b, [activeKey]: data }) });
+    dispatch({
+      type: 'mutate',
+      fn: (s) => ({
+        brackets: { ...s.brackets, [activeKey]: data },
+        benches: { ...s.benches, [activeKey]: [] },
+      }),
+    });
   }, [currentCategory, editingRoster, activeKey]);
 
   // Draw every weight class at once; the pager then flips through them.
@@ -501,7 +599,7 @@ export default function DrawScreen() {
       if (roster.length >= 2) next[c.key] = generateBracket(roster, c.label);
       else skipped++;
     }
-    dispatch({ type: 'mutate', fn: () => next });
+    dispatch({ type: 'mutate', fn: () => ({ brackets: next, benches: {} }) });
     const firstDrawn = categories.find((c) => next[c.key]);
     if (firstDrawn) {
       setActiveKey(firstDrawn.key);
@@ -580,13 +678,21 @@ export default function DrawScreen() {
   const handleDeleteCategory = useCallback(
     (key: string) => {
       const cat = categories.find((c) => c.key === key);
-      if (!cat || !confirm(`Xóa hạng cân "${cat.label}"?`)) return;
+      if (!cat || !confirm(`Xóa hạng cân "${cat.label}" (${cat.athletes.length} VĐV)?`)) return;
       setCategories((cats) => cats.filter((c) => c.key !== key));
+      // Drop the class's athletes from the master roster too, so the total and
+      // the all-athletes list stay in step with what's left.
+      setAllAthletes((prev) =>
+        prev
+          .filter((a) => categoryKey(a.category, a.ageGroup, a.gender) !== key)
+          .map((r, i) => ({ ...r, stt: i + 1 }))
+      );
       dispatch({
         type: 'mutate',
-        fn: (b) => {
-          const { [key]: _removed, ...rest } = b;
-          return rest;
+        fn: (s) => {
+          const { [key]: _rb, ...restBrackets } = s.brackets;
+          const { [key]: _bn, ...restBenches } = s.benches;
+          return { brackets: restBrackets, benches: restBenches };
         },
       });
       if (activeKey === key) {
@@ -596,6 +702,35 @@ export default function DrawScreen() {
     },
     [categories, activeKey]
   );
+
+  // Edit any field of an athlete in the master list. Changing weight/age/gender
+  // re-groups the classes, moving the athlete to (or creating) the right one.
+  const handleEditAthlete = useCallback(
+    (index: number, patch: Partial<AthleteRecord>) => {
+      const next = allAthletes.map((a, i) => (i === index ? { ...a, ...patch } : a));
+      setAllAthletes(next);
+      setCategories((cats) => regroupCategories(next, cats));
+    },
+    [allAthletes]
+  );
+
+  // Remove one athlete from both the master roster and their weight class — used
+  // to tidy the imported list before weigh-in (a no-show, a wrong entry).
+  const handleDeleteAthlete = useCallback((rec: AthleteRecord) => {
+    const rk = recordKey(rec);
+    if (!confirm(`Xóa VĐV "${rec.name}" (${rec.unit}) khỏi danh sách?`)) return;
+    setAllAthletes((prev) =>
+      prev.filter((a) => recordKey(a) !== rk).map((r, i) => ({ ...r, stt: i + 1 }))
+    );
+    setCategories((prev) =>
+      prev.map((c) => ({
+        ...c,
+        athletes: c.athletes
+          .filter((a) => recordKey(a) !== rk)
+          .map((a, i) => ({ ...a, stt: i + 1 })),
+      }))
+    );
+  }, []);
 
   return (
     <div className="relative min-h-full w-full bg-white p-6 text-black">
@@ -751,10 +886,63 @@ export default function DrawScreen() {
         <div className="min-w-[360px] max-w-[600px] flex-1">
           {showAll && allAthletes.length > 0 ? (
             <div>
-              <h3 className="mb-2 text-lg font-semibold">
-                Danh sách tất cả VĐV ({allAthletes.length})
-              </h3>
-              <FullRosterTable rows={allAthletes} />
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-lg font-semibold">
+                  Danh sách tất cả VĐV ({allAthletes.length})
+                </h3>
+                <button
+                  onClick={() => setEditingAll((v) => !v)}
+                  className={`rounded px-3 py-1 text-xs font-semibold ${
+                    editingAll
+                      ? 'bg-green-600 text-white hover:bg-green-700'
+                      : 'bg-gray-600 text-white hover:bg-gray-700'
+                  }`}
+                >
+                  {editingAll ? '✓ Xong' : '✎ Sửa thông tin'}
+                </button>
+              </div>
+              {editingAll && (
+                <p className="mb-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                  Sửa trực tiếp trong ô. Đổi <b>hạng cân / lứa tuổi / giới tính</b> sẽ tự
+                  chuyển VĐV sang hạng đúng.
+                </p>
+              )}
+
+              {/* Manage the imported classes before drawing: remove ones that
+                  won't run yet (weigh-in pending). Deleting a class drops its
+                  athletes from the list too. */}
+              {categories.length > 0 && (
+                <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                  <div className="mb-2 text-sm font-semibold text-gray-600">
+                    Hạng cân đã import ({categories.length}) — bấm ✕ để xóa hạng chưa cần
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map((c) => (
+                      <span
+                        key={c.key}
+                        className="flex items-center gap-1.5 rounded border border-gray-300 bg-white py-1 pl-2.5 pr-1 text-sm"
+                      >
+                        <span className="font-medium">{c.label}</span>
+                        <span className="text-xs text-gray-500">({c.athletes.length})</span>
+                        <button
+                          onClick={() => handleDeleteCategory(c.key)}
+                          className="grid h-5 w-5 place-items-center rounded bg-red-100 text-xs font-bold text-red-600 hover:bg-red-200"
+                          title={`Xóa hạng cân ${c.label}`}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <FullRosterTable
+                rows={allAthletes}
+                onDelete={handleDeleteAthlete}
+                editable={editingAll}
+                onEdit={handleEditAthlete}
+              />
             </div>
           ) : activeKey ? (
             <div>
@@ -885,6 +1073,11 @@ export default function DrawScreen() {
                   />
                 </label>
               </div>
+              <BenchPanel
+                bench={bench}
+                onDropFromBracket={handleBenchDrop}
+                onRemove={handleBenchRemove}
+              />
               <div className="overflow-x-auto bg-white p-4">
                 <div className="mb-2 bg-gray-700 px-3 py-1.5 text-sm font-bold uppercase text-white">
                   {bracketData.category}
