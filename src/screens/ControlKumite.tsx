@@ -14,6 +14,7 @@ import { useMatchAlerts } from '../hooks/useMatchAlerts';
 import { useKumiteHotkeys } from '../hooks/useKumiteHotkeys';
 import { useTournamentRunner } from '../hooks/useTournamentRunner';
 import { useTournamentStore } from '../store/tournamentStore';
+import { openDisplay } from '../lib/display';
 
 function parseTimeInput(value: string): number | null {
   const trimmed = value.trim();
@@ -543,9 +544,7 @@ export default function ControlKumite() {
             </button>
           )}
           <button
-            onClick={() =>
-              window.open('/kumite', 'karate-display', 'width=1280,height=800')
-            }
+            onClick={() => openDisplay('kumite')}
             className="shrink-0 rounded bg-neutral-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-neutral-700"
           >
             🖥 Mở bảng chiếu

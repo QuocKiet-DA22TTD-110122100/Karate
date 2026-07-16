@@ -7,6 +7,7 @@ import {
 } from '../store/kataStore';
 import { formatTime } from '../store/matchStore';
 import BackButton from '../components/BackButton';
+import { openDisplay } from '../lib/display';
 import { useKataAlerts } from '../hooks/useKataAlerts';
 
 function parseTimeInput(value: string): number | null {
@@ -131,9 +132,7 @@ export default function ControlKata() {
             </div>
           </div>
           <button
-            onClick={() =>
-              window.open('/kata', 'karate-display', 'width=1280,height=800')
-            }
+            onClick={() => openDisplay('kata')}
             className="ml-4 shrink-0 rounded bg-white/10 px-4 py-2 font-semibold hover:bg-white/20"
           >
             🖥 Mở bảng chiếu
