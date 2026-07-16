@@ -1,0 +1,12 @@
+node_modules
+dist
+*.local
+.DS_Store
+
+# Local tool state
+.claude/settings.local.json
+.qodo
+
+# Real competitor rosters — personal data of minors, kept out of the repo
+*.pdf
+*.csv

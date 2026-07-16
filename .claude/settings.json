@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__playwright__browser_press_key",
+      "Bash(rm -rf .playwright-mcp && rm -f *.png && npm run build 2>&1 | tail -2; echo \"--- artifacts:\"; ls | grep -iE \"playwright|\\\\.png$\" || echo \"none\")",
+      "mcp__playwright__browser_close",
+      "Bash(powershell.exe -NoProfile -Command 'Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '\\\\''*ms-playwright*'\\\\'' } | Stop-Process -Force; '\\\\''killed playwright chrome'\\\\''')"
+    ],
+    "additionalDirectories": [
+      "C:\\Thuctap\\karate-tournament"
+    ]
+  }
+}
