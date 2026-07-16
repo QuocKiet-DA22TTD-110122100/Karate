@@ -69,6 +69,24 @@ function lockReason(started: boolean, running: boolean, decided: boolean): strin
   return null;
 }
 
+/** Why the VR button is closed, or null when it can be pressed. VR needs the same
+ *  stopped-clock state as scoring, plus at least one point already on the board.
+ *  Once one side has VR the other side cannot take it. */
+function vrLockReason(
+  started: boolean,
+  running: boolean,
+  decided: boolean,
+  hasScore: boolean,
+  senshu: Side | null,
+  side: Side
+): string | null {
+  const base = lockReason(started, running, decided);
+  if (base) return base;
+  if (!hasScore) return 'VR chỉ bật khi đã có bên ghi điểm';
+  if (senshu && senshu !== side) return 'Bên kia đã dùng VR';
+  return null;
+}
+
 function DurationInput({
   seconds,
   running,
@@ -213,6 +231,9 @@ function SideConsole(props: Readonly<{ side: Side }>) {
   const senshu = useMatchStore((s) => s.senshu === side);
   const toggleSenshu = useMatchStore((s) => s.toggleSenshu);
   const setCompetitor = useMatchStore((s) => s.setCompetitor);
+  const vrReason = useMatchStore((s) =>
+    vrLockReason(s.started, s.running, s.winner !== null, s.scoreAo + s.scoreAka > 0, s.senshu, side)
+  );
   const isAo = side === 'ao';
 
   // AKA mirrors AO: its rows run 3-2-1 so the +1 sits nearest the outer edge.
@@ -265,8 +286,9 @@ function SideConsole(props: Readonly<{ side: Side }>) {
         ))}
         <button
           onClick={() => toggleSenshu(side)}
-          title={`VR — phím ${VR_KEYS[side]}`}
-          className={`relative grid h-11 w-14 place-items-center rounded-lg text-base font-bold transition-colors ${
+          disabled={vrReason !== null}
+          title={vrReason ?? `VR — phím ${VR_KEYS[side]}`}
+          className={`relative grid h-11 w-14 place-items-center rounded-lg text-base font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
             senshu ? 'bg-senshu text-white' : 'border-2 border-senshu text-senshu'
           }`}
         >

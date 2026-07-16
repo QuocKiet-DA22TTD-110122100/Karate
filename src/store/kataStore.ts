@@ -3,7 +3,7 @@ import type { Side, Competitor } from '../types';
 
 // Kata is timed, not scored: a 30s preparation window (enter / bow / announce),
 // then the operator starts the performance clock (1:30 / 2:00 / 3:00).
-export const KATA_DURATIONS = [90, 120, 180] as const; // seconds
+export const KATA_DURATIONS = [10, 15, 30, 60, 90, 120, 180] as const; // seconds
 export const KATA_OPTIONS = [
   'KATA',
   'Heian Shodan',

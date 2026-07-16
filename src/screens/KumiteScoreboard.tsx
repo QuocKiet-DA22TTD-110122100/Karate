@@ -17,7 +17,7 @@ export default function KumiteScoreboard() {
   const { warningPhase } = useMatchAlerts();
 
   return (
-    <div className="relative flex min-h-screen w-full flex-col bg-board px-8 py-6">
+    <div className="relative flex h-screen w-full flex-col overflow-hidden bg-board px-8 py-6">
       {/* Blinking yellow border for the final 15 seconds. */}
       {warningPhase && (
         <div className="animate-blink pointer-events-none fixed inset-0 z-40 ring-[14px] ring-inset ring-timer" />

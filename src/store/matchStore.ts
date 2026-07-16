@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { Side, Competitor } from '../types';
 
 const MATCH_SECONDS = 120; // default 2:00
-export const MATCH_DURATIONS = [90, 120, 180] as const; // 1:30 / 2:00 / 3:00
+export const MATCH_DURATIONS = [10, 15, 30, 60, 90, 120, 180] as const; // 0:10 / 0:15 / 0:30 / 1:00 / 1:30 / 2:00 / 3:00
 const WIN_MARGIN = 8; // an 8-point lead ends the match
 const FINAL_FOUL = 'H'; // reaching this foul hands the win to the opponent
 // Penalty codes as shown on the kumite board, left→right for the AO side.
@@ -240,7 +240,18 @@ export const useMatchStore = create<MatchState>((set) => ({
     }),
 
   toggleSenshu: (side) =>
-    set((s) => ({ senshu: s.senshu === side ? null : side })),
+    set((s) => {
+      if (s.winner) return {};
+      // VR is gated like points: the bout must be under way and the clock
+      // stopped. On top of that it needs a score on the board — senshu is a
+      // first-point advantage, so it is meaningless at 0-0 and a press there is
+      // almost certainly a slip.
+      if (!s.started || s.running) return {};
+      if (s.scoreAo + s.scoreAka === 0) return {};
+      // Only one side can hold VR at a time.
+      if (s.senshu && s.senshu !== side) return {};
+      return { senshu: s.senshu === side ? null : side };
+    }),
 
   togglePenalty: (side, code) =>
     set((s) => {
@@ -262,6 +273,10 @@ export const useMatchStore = create<MatchState>((set) => ({
       } else if (s.foulNotice?.side === side && s.foulNotice?.code === code) {
         patch.foulNotice = null;
         patch.foulNoticeUntil = null;
+      }
+      // A HC penalty forfeits that competitor's own VR advantage.
+      if (adding && code === 'HC' && s.senshu === side) {
+        patch.senshu = null;
       }
       // Reaching the final foul hands the win to the opponent.
       if (next.includes(FINAL_FOUL)) {

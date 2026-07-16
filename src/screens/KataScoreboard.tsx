@@ -23,11 +23,12 @@ export default function KataScoreboard() {
   const tournament = useKataStore((s) => s.tournament);
   const category = useKataStore((s) => s.category);
   const seconds = useKataStore((s) => s.seconds);
+  const running = useKataStore((s) => s.running);
   const phase = useKataStore((s) => s.phase);
   const { warningPhase } = useKataAlerts();
 
   return (
-    <div className="relative flex min-h-screen w-full flex-col bg-board px-8 py-6">
+    <div className="relative flex h-screen w-full flex-col overflow-hidden bg-board px-8 py-6">
       {warningPhase && (
         <div className="animate-blink pointer-events-none fixed inset-0 z-40 ring-[14px] ring-inset ring-timer" />
       )}
@@ -58,7 +59,13 @@ export default function KataScoreboard() {
         <div className="text-2xl font-semibold uppercase tracking-widest text-white/70">
           {phase === 'prepare' ? 'Chuẩn bị' : 'Đi quyền'}
         </div>
-        <div className="text-[12rem] font-black leading-none text-timer tabular-nums">
+        <div className={`font-black leading-none tabular-nums text-[16rem] ${
+          running && phase === 'perform' && seconds <= 15
+            ? 'text-red-500 animate-blink'
+            : running && phase === 'perform'
+            ? 'text-white'
+            : 'text-timer'
+        }`}>
           {formatTime(seconds)}
         </div>
         <div className="absolute bottom-2 left-2 max-w-xs text-left text-3xl font-medium leading-tight text-white">

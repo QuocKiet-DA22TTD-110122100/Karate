@@ -49,10 +49,12 @@ function beep(
   osc.stop(t + durationMs / 1000);
 }
 
-/** Two short high beeps — "time almost up" (fires at 0:15). */
+/** Bell ring for 2 seconds — "time almost up" (fires at 0:15). */
 export function playWarning(): void {
-  beep(880, 150, 0);
-  beep(880, 150, 0.25);
+  beep(1200, 500, 0, 'sine', 0.2);
+  beep(900, 500, 0.5, 'sine', 0.15);
+  beep(1200, 500, 1, 'sine', 0.12);
+  beep(900, 500, 1.5, 'sine', 0.1);
 }
 
 /** One long low buzz — "match over" (fires at 0:00). */

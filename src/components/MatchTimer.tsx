@@ -12,7 +12,7 @@ interface MatchTimerProps {
 export default function MatchTimer({
   showControls = true,
   drivesClock = true,
-  timeClassName = 'text-[10rem]',
+  timeClassName = 'text-[14rem]',
 }: MatchTimerProps) {
   const seconds = useMatchStore((s) => s.seconds);
   const running = useMatchStore((s) => s.running);
@@ -27,9 +27,14 @@ export default function MatchTimer({
     return () => clearInterval(id);
   }, [running, drivesClock, tick]);
 
+  let stateColor = 'text-timer';
+  if (running) {
+    stateColor = seconds <= 15 ? 'text-red-500 animate-blink' : 'text-white';
+  }
+
   return (
     <div className="flex flex-col items-center gap-4">
-      <div className={`font-bold leading-none text-timer tabular-nums ${timeClassName}`}>
+      <div className={`font-bold leading-none tabular-nums ${stateColor} ${timeClassName}`}>
         {formatTime(seconds)}
       </div>
       {showControls && (
