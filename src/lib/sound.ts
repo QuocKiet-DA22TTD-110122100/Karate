@@ -51,12 +51,18 @@ function beep(
 
 /** Play the bell sound for 2 seconds — "time almost up" (fires at 0:15). */
 let _bell: HTMLAudioElement | null = null;
+let _bellTimer: ReturnType<typeof setTimeout> | null = null;
 export function playWarning(): void {
   if (!_bell) {
-    _bell = new Audio(new URL('/tieng-chuong-het-gio.mp3', import.meta.env.BASE_URL).href);
+    _bell = new Audio(window.location.origin + import.meta.env.BASE_URL + 'tieng-chuong-het-gio.mp3');
   }
+  if (_bellTimer) clearTimeout(_bellTimer);
   _bell.currentTime = 0;
   _bell.play().catch(() => {});
+  _bellTimer = setTimeout(() => {
+    _bell!.pause();
+    _bellTimer = null;
+  }, 2000);
 }
 
 /** One long low buzz — "match over" (fires at 0:00). */
