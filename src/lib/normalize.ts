@@ -39,8 +39,11 @@ export function parseGender(s: string): string {
  */
 export function parseWeight(s: string): { weight: string; rest: string } {
   const src = normalizeSpace(s);
-  // "Trên 42kg" / "+42kg" / "> 42kg" is the open (heavier) class — keep distinct.
-  const over = /(trên|tren|\+|>|over|hơn)\s*\d{1,3}\s*(?:kgs?|kí|ký)/i.test(src);
+  // "Trên 42kg" / "+42kg" / "> 42kg" — and the trailing form "42kg+" that our
+  // own labels use — is the open (heavier) class; keep it distinct from "42kg".
+  const over =
+    /(trên|tren|\+|>|over|hơn)\s*\d{1,3}\s*(?:kgs?|kí|ký)/i.test(src) ||
+    /\d{1,3}\s*(?:kgs?|kí|ký)\s*\+/i.test(src);
   const suffix = over ? '+' : '';
 
   // Range with a unit: "36-40kg", "36 - 40 kg"

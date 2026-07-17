@@ -50,8 +50,8 @@ export function FullRosterTable({ rows, onDelete, editable, onEdit }: Readonly<F
   const canEdit = !!(editable && onEdit);
 
   return (
-    <div className="max-h-[500px] overflow-y-auto">
-      <table className="w-full border-collapse border-2 border-black text-left text-sm">
+    <div className="max-h-[560px] overflow-y-auto">
+      <table className="w-full border-collapse border-2 border-black text-left text-base">
         <thead className="sticky top-0 bg-gray-100">
           <tr>
             <th className="w-10 border-2 border-black px-2 py-2 text-center">STT</th>

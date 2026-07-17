@@ -89,17 +89,24 @@ function parseRow(fields: string[]): { name: string; unit: string; weight: strin
   return { name: name.trim(), unit: unit.trim(), weight: weight.trim() };
 }
 
+export interface PdfExtract {
+  sheets: { sheetName: string; rows: PdfRow[] }[];
+  // false → no page had any selectable text: the PDF is image-only (scans, or
+  // the app's own bracket export, which renders to canvas). The caller can then
+  // explain the problem instead of a generic "no athletes found".
+  hadText: boolean;
+}
+
 /**
  * Extract roster rows from a real tournament PDF. Each page is treated as its
  * own group: the section title above the table (e.g. "NAM NHÓM TỪ 7-9 TUỔI")
  * supplies age + gender, while each row supplies name, unit and weight class.
  */
-export async function extractRowsFromPdf(
-  file: File
-): Promise<{ sheetName: string; rows: PdfRow[] }[]> {
+export async function extractRowsFromPdf(file: File): Promise<PdfExtract> {
   const data = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data }).promise;
   const sheets: { sheetName: string; rows: PdfRow[] }[] = [];
+  let hadText = false;
 
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
@@ -115,6 +122,7 @@ export async function extractRowsFromPdf(
         };
       })
       .filter((it) => it.str !== '');
+    if (items.length > 0) hadText = true;
 
     const lines = groupIntoLines(items).map(groupIntoFields);
 
@@ -137,5 +145,5 @@ export async function extractRowsFromPdf(
     if (rows.length > 0) sheets.push({ sheetName: title, rows });
   }
 
-  return sheets;
+  return { sheets, hadText };
 }

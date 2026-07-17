@@ -34,7 +34,7 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 // Bracket size: ≤4 → 4 slots, ≤8 → 8 slots, otherwise next power of two.
-function bracketSize(n: number): number {
+export function bracketSize(n: number): number {
   if (n <= 1) return 2;
   if (n <= 4) return 4;
   if (n <= 8) return 8;

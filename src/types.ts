@@ -19,6 +19,7 @@ export interface AthleteRecord {
   category: string; // e.g. "25kg", "36kg"
   ageGroup: string; // e.g. "6-9", "10-11"
   gender: string; // e.g. "Nam", "Nữ"
+  lot?: number; // số thăm đã bốc sẵn (vị trí trong sơ đồ), nếu file import có
 }
 
 export interface CategoryInfo {

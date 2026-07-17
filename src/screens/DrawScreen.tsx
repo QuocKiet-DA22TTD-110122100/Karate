@@ -5,11 +5,14 @@ import RosterTable, { FullRosterTable } from '../components/draw/RosterTable';
 import BenchPanel from '../components/draw/BenchPanel';
 import Bracket from '../components/draw/Bracket';
 import AddCategoryDialog from '../components/draw/AddCategoryDialog';
+import CategoryCards from '../components/draw/CategoryCards';
 import {
   generateBracket,
   swapSlots,
   setSlotAthlete,
   placeAthlete,
+  buildBracketFromSlots,
+  bracketSize,
   type BracketData,
 } from '../lib/drawAlgorithm';
 import {
@@ -40,6 +43,8 @@ interface ImportReport {
   sheetCount: number;
   athleteCount: number;
   classes: { label: string; count: number }[];
+  // Classes whose brackets were built straight from the file's lot numbers.
+  drawnClasses: string[];
 }
 
 // Pick the first non-empty value among several possible column headers.
@@ -80,7 +85,14 @@ function buildRecords(sheets: Sheet[]): AthleteRecord[] {
         combined: pick(row, ['Nội dung', 'Noi dung', 'Hạng mục', 'Hang muc', 'Nội dung thi đấu']),
         sheetName,
       });
-      out.push({ stt: 0, name, unit, category: weight, ageGroup, gender });
+      // A pre-drawn file carries each athlete's lot number (bracket position).
+      const lotRaw = pick(row, [
+        'Số thăm', 'Số Thăm', 'SỐ THĂM', 'So tham', 'Thăm', 'Tham', 'Thăm số',
+        'Vị trí', 'Vi tri', 'Vị trí thăm', 'Lot', 'lot', 'Slot', 'slot', 'Draw',
+      ]);
+      const lotMatch = lotRaw.match(/\d+/);
+      const lot = lotMatch ? parseInt(lotMatch[0], 10) : 0;
+      out.push({ stt: 0, name, unit, category: weight, ageGroup, gender, ...(lot > 0 ? { lot } : {}) });
     }
   }
   return out;
@@ -281,6 +293,7 @@ export default function DrawScreen() {
   const currentCategory = categories.find((c) => c.key === activeKey);
   const catIndex = categories.findIndex((c) => c.key === activeKey);
   const drawnCount = Object.keys(brackets).length;
+  const drawnKeys = useMemo(() => new Set(Object.keys(brackets)), [brackets]);
 
   // Shared ingest for both Excel and PDF: normalise each row and group by class.
   // Merge imported records into the existing roster (append + de-duplicate) so a
@@ -326,6 +339,60 @@ export default function DrawScreen() {
 
     setShowAll(true);
 
+    // Classes where the file already carries lot numbers were drawn elsewhere
+    // (technical meeting, another tool): build their brackets straight from the
+    // file instead of asking the operator to re-randomise. Rows of such a class
+    // that lack a lot number go to the bench so the omission is visible.
+    const lottedKeys = new Set<string>();
+    for (const r of incoming) {
+      if (r.lot && r.lot >= 1) lottedKeys.add(categoryKey(r.category, r.ageGroup, r.gender));
+    }
+    const drawnClasses: string[] = [];
+    if (lottedKeys.size > 0) {
+      const byClass = new Map<string, { label: string; entries: AthleteRecord[] }>();
+      for (const r of incoming) {
+        const key = categoryKey(r.category, r.ageGroup, r.gender);
+        if (!lottedKeys.has(key)) continue;
+        let g = byClass.get(key);
+        if (!g) {
+          g = { label: categoryLabel(r.category, r.ageGroup, r.gender), entries: [] };
+          byClass.set(key, g);
+        }
+        g.entries.push(r);
+      }
+      const newBrackets: Record<string, BracketData> = {};
+      const newBenches: Record<string, RosterEntry[]> = {};
+      for (const [key, { label, entries }] of byClass) {
+        const maxLot = Math.max(...entries.map((e) => e.lot ?? 0));
+        const size = Math.max(bracketSize(entries.length), bracketSize(maxLot));
+        const byLot = new Map<number, RosterEntry>();
+        const bench: RosterEntry[] = [];
+        for (const e of entries) {
+          // Duplicate or missing lots land on the bench for the operator to place.
+          if (e.lot && e.lot >= 1 && e.lot <= size && !byLot.has(e.lot)) {
+            byLot.set(e.lot, { stt: e.lot, name: e.name, unit: e.unit });
+          } else {
+            bench.push({ stt: bench.length + 1, name: e.name, unit: e.unit });
+          }
+        }
+        const slots = Array.from({ length: size }, (_, i) => ({
+          position: i + 1,
+          athlete: byLot.get(i + 1) ?? null,
+        }));
+        newBrackets[key] = buildBracketFromSlots(slots, label);
+        newBenches[key] = bench;
+        drawnClasses.push(label);
+      }
+      dispatch({
+        type: 'mutate',
+        fn: (s) => ({
+          brackets: { ...s.brackets, ...newBrackets },
+          benches: { ...s.benches, ...newBenches },
+        }),
+      });
+      drawnClasses.sort((a, b) => a.localeCompare(b, 'vi'));
+    }
+
     // Report on this file alone, not the accumulated roster.
     const perClass = new Map<string, number>();
     for (const r of incoming) {
@@ -339,6 +406,7 @@ export default function DrawScreen() {
       classes: [...perClass.entries()]
         .map(([label, count]) => ({ label, count }))
         .sort((a, b) => a.label.localeCompare(b.label, 'vi')),
+      drawnClasses,
     };
   }, []);
 
@@ -373,7 +441,16 @@ export default function DrawScreen() {
       try {
         let sheets: Sheet[];
         if (/\.pdf$/i.test(file.name)) {
-          sheets = await extractRowsFromPdf(file);
+          const extracted = await extractRowsFromPdf(file);
+          if (!extracted.hadText) {
+            alert(
+              'PDF này chỉ chứa hình ảnh (ví dụ: file sơ đồ do app xuất ra) nên không đọc được chữ.\n' +
+                'Hãy import file Excel/CSV. Nếu đã bốc thăm, dùng nút "⬇ Xuất Excel kèm số thăm" để tạo file import lại được.'
+            );
+            e.target.value = '';
+            return;
+          }
+          sheets = extracted.sheets;
         } else {
           const data = await file.arrayBuffer();
           const workbook = XLSX.read(data, { type: 'array' });
@@ -569,27 +646,43 @@ export default function DrawScreen() {
   );
 
   // Re-draw just the current class (uses any in-progress edits).
-  const handleDrawOne = useCallback(() => {
-    if (!currentCategory) return;
-    const cleaned = editingRoster
-      .filter((r) => r.name.trim() !== '')
-      .map((r, i) => ({ ...r, stt: i + 1 }));
-    if (cleaned.length < 2) {
-      alert('Hạng cân cần ít nhất 2 VĐV để bốc thăm.');
-      return;
-    }
-    const data = generateBracket(cleaned, currentCategory.label);
-    dispatch({
-      type: 'mutate',
-      fn: (s) => ({
-        brackets: { ...s.brackets, [activeKey]: data },
-        benches: { ...s.benches, [activeKey]: [] },
-      }),
-    });
-  }, [currentCategory, editingRoster, activeKey]);
+  // Draw one class straight from its own roster — used by the class cards, so it
+  // doesn't depend on which class is currently selected/edited.
+  const drawCategoryByKey = useCallback(
+    (key: string) => {
+      const cat = categories.find((c) => c.key === key);
+      if (!cat) return;
+      const cleaned = cat.athletes
+        .filter((a) => a.name.trim() !== '')
+        .map((r, i) => ({ stt: i + 1, name: r.name, unit: r.unit }));
+      if (cleaned.length < 2) {
+        alert(`Hạng "${cat.label}" cần ít nhất 2 VĐV để bốc thăm.`);
+        return;
+      }
+      const data = generateBracket(cleaned, cat.label);
+      dispatch({
+        type: 'mutate',
+        fn: (s) => ({
+          brackets: { ...s.brackets, [key]: data },
+          benches: { ...s.benches, [key]: [] },
+        }),
+      });
+      handleSelectCategory(key);
+      setShowAll(false);
+    },
+    [categories, handleSelectCategory]
+  );
 
   // Draw every weight class at once; the pager then flips through them.
   const handleDrawAll = useCallback(() => {
+    // Re-drawing replaces every existing bracket — including ones imported from
+    // a pre-drawn file — so make sure that's really what the operator wants.
+    if (
+      Object.keys(brackets).length > 0 &&
+      !confirm('Bốc thăm lại sẽ thay thế TẤT CẢ sơ đồ hiện có (kể cả sơ đồ import từ file đã bốc thăm). Tiếp tục?')
+    ) {
+      return;
+    }
     const next: Record<string, BracketData> = {};
     let skipped = 0;
     for (const c of categories) {
@@ -611,7 +704,7 @@ export default function DrawScreen() {
     } else if (skipped > 0) {
       alert(`Đã bốc ${Object.keys(next).length} hạng. Bỏ qua ${skipped} hạng dưới 2 VĐV.`);
     }
-  }, [categories]);
+  }, [categories, brackets]);
 
   // Render the current bracket to a PDF (browser fonts → Vietnamese OK).
   // Uses the off-screen, non-interactive copy so editing affordances (the dashed
@@ -657,6 +750,45 @@ export default function DrawScreen() {
       setExporting(false);
     }
   }, [categories, brackets]);
+
+  // Export the whole draw to one Excel sheet, with each athlete's lot number
+  // (số thăm) where a bracket exists. Unlike the PDF export (images only), this
+  // file re-imports as-is and rebuilds the same brackets — the official record.
+  const handleExportExcel = useCallback(() => {
+    const rows: Record<string, string | number>[] = [];
+    for (const c of categories) {
+      const br = brackets[c.key];
+      const lotMap = new Map<string, number | ''>();
+      if (br) {
+        for (const s of br.slots) {
+          if (s.athlete) {
+            const key = `${s.athlete.name}|${s.athlete.unit}`.toLowerCase();
+            lotMap.set(key, s.position);
+          }
+        }
+        for (const a of benches[c.key] ?? []) {
+          const key = `${a.name}|${a.unit}`.toLowerCase();
+          if (!lotMap.has(key)) lotMap.set(key, '');
+        }
+      }
+      for (const a of c.athletes) {
+        const key = `${a.name}|${a.unit}`.toLowerCase();
+        const lot = lotMap.get(key);
+        rows.push({
+          'Họ và tên': a.name,
+          'Đơn vị': a.unit,
+          'Hạng cân': c.label,
+          'Số thăm': lot === undefined ? '' : lot,
+        });
+      }
+    }
+    if (rows.length === 0) return;
+    const numbered = rows.map((r, i) => ({ STT: i + 1, ...r }));
+    const ws = XLSX.utils.json_to_sheet(numbered);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Danh sách bốc thăm');
+    XLSX.writeFile(wb, 'danh-sach-boc-tham.xlsx');
+  }, [categories, brackets, benches]);
 
   // Open an empty class picked from the dialog. Values come from the roster's own
   // vocabulary, so the key matches an imported class exactly if one appears later.
@@ -730,18 +862,41 @@ export default function DrawScreen() {
           .map((a, i) => ({ ...a, stt: i + 1 })),
       }))
     );
+    const catKey = categoryKey(rec.category, rec.ageGroup, rec.gender);
+    dispatch({
+      type: 'mutate',
+      fn: (s) => {
+        const br = s.brackets[catKey];
+        if (!br) return s;
+        const newSlots = br.slots.map((sl) =>
+          sl.athlete && sameAthlete(sl.athlete, rec)
+            ? { ...sl, athlete: null }
+            : sl
+        );
+        const newBenches = (s.benches[catKey] ?? []).filter(
+          (a) => !sameAthlete(a, rec)
+        );
+        return {
+          brackets: { ...s.brackets, [catKey]: { ...br, slots: newSlots } },
+          benches:
+            newBenches.length === (s.benches[catKey] ?? []).length
+              ? s.benches
+              : { ...s.benches, [catKey]: newBenches },
+        };
+      },
+    });
   }, []);
 
   return (
     <div className="relative min-h-full w-full bg-white p-6 text-black">
       <button
         onClick={() => navigate('/')}
-        className="absolute right-4 top-4 rounded bg-black/10 px-4 py-2 text-sm font-semibold hover:bg-black/20"
+        className="absolute right-4 top-4 rounded-lg bg-black/10 px-5 py-2.5 text-base font-semibold hover:bg-black/20"
       >
         ← Menu
       </button>
 
-      <h1 className="mb-6 text-3xl font-bold">Bốc thăm thi đấu</h1>
+      <h1 className="mb-5 text-4xl font-bold">Bốc thăm thi đấu</h1>
 
       <AddCategoryDialog
         open={addingCategory}
@@ -752,8 +907,8 @@ export default function DrawScreen() {
         existingKeys={existingKeys}
       />
 
-      {/* Toolbar */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      {/* Toolbar — grouped into one clear control bar with large, labelled buttons */}
+      <div className="mb-4 flex flex-wrap items-center gap-2.5 rounded-xl border border-gray-200 bg-gray-50 p-3">
         <input
           ref={fileInputRef}
           type="file"
@@ -763,46 +918,49 @@ export default function DrawScreen() {
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+          className="rounded-lg bg-blue-600 px-5 py-2.5 text-base font-semibold text-white shadow-sm hover:bg-blue-700"
         >
-          + Thêm file Excel / PDF
+          📁 Thêm file Excel / PDF
         </button>
         <button
           onClick={() => setAddingCategory(true)}
-          className="rounded bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700"
+          className="rounded-lg bg-green-600 px-5 py-2.5 text-base font-semibold text-white shadow-sm hover:bg-green-700"
         >
-          + Thêm hạng cân
+          ＋ Thêm hạng cân
         </button>
         {categories.length > 0 && (
-          <button
-            onClick={handleDrawAll}
-            className="rounded bg-red-600 px-5 py-2 text-sm font-bold text-white shadow hover:bg-red-700"
-          >
-            🎲 BỐC THĂM TẤT CẢ
-          </button>
-        )}
-        {allAthletes.length > 0 && (
-          <button
-            onClick={handleClearAll}
-            className="rounded bg-red-100 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-200"
-          >
-            Xóa hết
-          </button>
+          <>
+            <span className="mx-1 h-8 w-px bg-gray-300" />
+            <button
+              onClick={handleDrawAll}
+              className="rounded-lg bg-red-600 px-6 py-2.5 text-base font-bold text-white shadow hover:bg-red-700"
+            >
+              🎲 BỐC THĂM TẤT CẢ
+            </button>
+          </>
         )}
         <button
           onClick={() => setShowAll(!showAll)}
-          className={`rounded px-4 py-2 text-sm font-semibold ${
+          className={`rounded-lg px-5 py-2.5 text-base font-semibold ${
             showAll ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           }`}
         >
-          {showAll ? 'Tất cả VĐV' : 'Theo hạng cân'}
+          {showAll ? '👁 Tất cả VĐV' : '📋 Theo hạng cân'}
         </button>
-        {fileName && (
-          <span className="text-sm text-gray-500">
-            File ({allAthletes.length} VĐV): {fileName}
-          </span>
+        {allAthletes.length > 0 && (
+          <button
+            onClick={handleClearAll}
+            className="ml-auto rounded-lg bg-red-100 px-5 py-2.5 text-base font-semibold text-red-600 hover:bg-red-200"
+          >
+            🗑 Xóa hết
+          </button>
         )}
       </div>
+      {fileName && (
+        <p className="mb-4 text-base text-gray-600">
+          📄 File ({allAthletes.length} VĐV): <b>{fileName}</b>
+        </p>
+      )}
 
       {/* What the last import actually read — check it against the programme. */}
       {importReport && (
@@ -821,6 +979,14 @@ export default function DrawScreen() {
                 Đối chiếu với thể lệ giải. Hạng cân không ai đăng ký sẽ không có ở
                 đây — dùng <b>“+ Thêm hạng cân”</b> để mở hạng trống.
               </p>
+              {importReport.drawnClasses.length > 0 && (
+                <p className="mt-1 rounded bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
+                  ✔ File có sẵn <b>số thăm</b> cho {importReport.drawnClasses.length} hạng —
+                  sơ đồ đã được dựng đúng theo kết quả bốc thăm trong file:{' '}
+                  {importReport.drawnClasses.join(', ')}. VĐV thiếu/trùng số thăm nằm ở
+                  ghế chờ.
+                </p>
+              )}
             </div>
             <button
               onClick={() => setImportReport(null)}
@@ -842,43 +1008,30 @@ export default function DrawScreen() {
         </div>
       )}
 
-      {/* Category selector + actions */}
-      {categories.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <label className="text-sm font-semibold text-gray-600">Hạng cân:</label>
-          <select
-            value={activeKey}
-            onChange={(e) => handleSelectCategory(e.target.value)}
-            className="rounded border-2 border-gray-300 bg-white px-4 py-2 pr-8 text-sm font-medium shadow-sm focus:border-yellow-400 focus:outline-none"
-          >
-            {categories.map((cat) => (
-              <option key={cat.key} value={cat.key}>
-                {cat.label} ({cat.athletes.length} VĐV)
-              </option>
-            ))}
-          </select>
-          {activeKey && (
-            <>
-              <button
-                onClick={() => handleDeleteCategory(activeKey)}
-                className="rounded bg-red-100 px-2 py-2 text-xs text-red-600 hover:bg-red-200"
-              >
-                ✕
-              </button>
-              <span className="mx-2 h-6 w-px bg-gray-300" />
-              <span className="text-sm text-gray-500">
-                {editingRoster.filter((r) => r.name.trim() !== '').length} VĐV
-              </span>
-              <button
-                onClick={handleDrawOne}
-                className="rounded bg-red-600 px-5 py-2 text-sm font-bold text-white shadow hover:bg-red-700"
-              >
-                🎲 Bốc lại hạng này
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      {/* Weight classes as cards (replaces the dropdown). Pick a card to show its
+          bracket; each card runs its own draw / edit / add / delete. */}
+      <CategoryCards
+        categories={categories}
+        activeKey={activeKey}
+        drawnKeys={drawnKeys}
+        onSelect={(key) => {
+          handleSelectCategory(key);
+          setShowAll(false);
+        }}
+        onDraw={drawCategoryByKey}
+        onEdit={(key) => {
+          handleSelectCategory(key);
+          setShowAll(false);
+          setIsEditing(true);
+        }}
+        onAdd={(key) => {
+          handleSelectCategory(key);
+          setShowAll(false);
+          setIsEditing(true);
+          handleAddRow();
+        }}
+        onDelete={handleDeleteCategory}
+      />
 
       {/* Main content */}
       <div className="flex flex-wrap gap-8">
@@ -887,12 +1040,12 @@ export default function DrawScreen() {
           {showAll && allAthletes.length > 0 ? (
             <div>
               <div className="mb-2 flex items-center justify-between gap-2">
-                <h3 className="text-lg font-semibold">
+                <h3 className="text-2xl font-bold">
                   Danh sách tất cả VĐV ({allAthletes.length})
                 </h3>
                 <button
                   onClick={() => setEditingAll((v) => !v)}
-                  className={`rounded px-3 py-1 text-xs font-semibold ${
+                  className={`rounded-lg px-4 py-2 text-base font-semibold ${
                     editingAll
                       ? 'bg-green-600 text-white hover:bg-green-700'
                       : 'bg-gray-600 text-white hover:bg-gray-700'
@@ -902,39 +1055,10 @@ export default function DrawScreen() {
                 </button>
               </div>
               {editingAll && (
-                <p className="mb-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   Sửa trực tiếp trong ô. Đổi <b>hạng cân / lứa tuổi / giới tính</b> sẽ tự
                   chuyển VĐV sang hạng đúng.
                 </p>
-              )}
-
-              {/* Manage the imported classes before drawing: remove ones that
-                  won't run yet (weigh-in pending). Deleting a class drops its
-                  athletes from the list too. */}
-              {categories.length > 0 && (
-                <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-                  <div className="mb-2 text-sm font-semibold text-gray-600">
-                    Hạng cân đã import ({categories.length}) — bấm ✕ để xóa hạng chưa cần
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {categories.map((c) => (
-                      <span
-                        key={c.key}
-                        className="flex items-center gap-1.5 rounded border border-gray-300 bg-white py-1 pl-2.5 pr-1 text-sm"
-                      >
-                        <span className="font-medium">{c.label}</span>
-                        <span className="text-xs text-gray-500">({c.athletes.length})</span>
-                        <button
-                          onClick={() => handleDeleteCategory(c.key)}
-                          className="grid h-5 w-5 place-items-center rounded bg-red-100 text-xs font-bold text-red-600 hover:bg-red-200"
-                          title={`Xóa hạng cân ${c.label}`}
-                        >
-                          ✕
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                </div>
               )}
 
               <FullRosterTable
@@ -946,8 +1070,8 @@ export default function DrawScreen() {
             </div>
           ) : activeKey ? (
             <div>
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-lg font-semibold">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="text-2xl font-bold">
                   Danh sách VĐV - {currentCategory?.label || ''}
                 </h3>
                 <div className="flex gap-2">
@@ -955,29 +1079,29 @@ export default function DrawScreen() {
                     <>
                       <button
                         onClick={handleAddRow}
-                        className="rounded bg-blue-500 px-3 py-1 text-xs text-white hover:bg-blue-600"
+                        className="rounded-lg bg-blue-500 px-4 py-2 text-base font-semibold text-white hover:bg-blue-600"
                       >
-                        + Thêm
+                        ＋ Thêm
                       </button>
                       <button
                         onClick={handleRemoveEmpty}
-                        className="rounded bg-orange-500 px-3 py-1 text-xs text-white hover:bg-orange-600"
+                        className="rounded-lg bg-orange-500 px-4 py-2 text-base font-semibold text-white hover:bg-orange-600"
                       >
                         Xóa trống
                       </button>
                       <button
                         onClick={handleSaveRoster}
-                        className="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700"
+                        className="rounded-lg bg-green-600 px-4 py-2 text-base font-semibold text-white hover:bg-green-700"
                       >
-                        Lưu
+                        ✓ Lưu
                       </button>
                     </>
                   ) : (
                     <button
                       onClick={() => setIsEditing(true)}
-                      className="rounded bg-gray-600 px-3 py-1 text-xs text-white hover:bg-gray-700"
+                      className="rounded-lg bg-gray-600 px-4 py-2 text-base font-semibold text-white hover:bg-gray-700"
                     >
-                      Sửa
+                      ✎ Sửa
                     </button>
                   )}
                 </div>
@@ -991,7 +1115,7 @@ export default function DrawScreen() {
               />
             </div>
           ) : (
-            <div className="rounded border-2 border-dashed border-gray-300 p-8 text-center text-gray-400">
+            <div className="rounded-lg border-2 border-dashed border-gray-300 p-10 text-center text-lg text-gray-400">
               {allAthletes.length === 0
                 ? 'Import file Excel để bắt đầu'
                 : 'Chọn một hạng cân để xem danh sách'}
@@ -1002,16 +1126,16 @@ export default function DrawScreen() {
         {/* Right: Bracket + pager */}
         <div className="min-w-[500px] flex-1">
           {drawnCount > 0 && categories.length > 0 && (
-            <div className="mb-3 flex items-center justify-between gap-2 rounded bg-gray-100 px-3 py-2">
+            <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-gray-100 px-3 py-2.5">
               <button
                 onClick={() => gotoCategory(-1)}
-                className="rounded bg-white px-3 py-1.5 text-sm font-semibold shadow hover:bg-gray-50"
+                className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50"
               >
                 ‹ Trước
               </button>
-              <div className="text-center text-sm leading-tight">
-                <div className="font-bold">{currentCategory?.label}</div>
-                <div className="text-gray-500">
+              <div className="text-center leading-tight">
+                <div className="text-base font-bold">{currentCategory?.label}</div>
+                <div className="text-sm text-gray-500">
                   Hạng {catIndex + 1}/{categories.length} · Đã bốc {drawnCount}
                 </div>
               </div>
@@ -1020,7 +1144,7 @@ export default function DrawScreen() {
                   onClick={undo}
                   disabled={!canUndo}
                   title="Hoàn tác (Ctrl+Z)"
-                  className="rounded bg-white px-3 py-1.5 text-sm font-semibold shadow hover:bg-gray-50 disabled:opacity-40"
+                  className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50 disabled:opacity-40"
                 >
                   ↶ Hoàn tác
                 </button>
@@ -1028,27 +1152,34 @@ export default function DrawScreen() {
                   onClick={redo}
                   disabled={!canRedo}
                   title="Làm lại (Ctrl+Y)"
-                  className="rounded bg-white px-3 py-1.5 text-sm font-semibold shadow hover:bg-gray-50 disabled:opacity-40"
+                  className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50 disabled:opacity-40"
                 >
                   ↷ Làm lại
                 </button>
                 <button
                   onClick={handleExportPdf}
                   disabled={!bracketData || exporting}
-                  className="rounded bg-gray-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-40"
+                  className="rounded-lg bg-gray-700 px-4 py-2 text-base font-semibold text-white hover:bg-gray-800 disabled:opacity-40"
                 >
                   ⬇ Xuất PDF hạng này
                 </button>
                 <button
                   onClick={handleExportAllPdf}
                   disabled={exporting}
-                  className="rounded bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-black disabled:opacity-40"
+                  className="rounded-lg bg-gray-900 px-4 py-2 text-base font-semibold text-white hover:bg-black disabled:opacity-40"
                 >
                   {exporting ? 'Đang xuất…' : `⬇ Xuất tất cả PDF (${drawnCount})`}
                 </button>
                 <button
+                  onClick={handleExportExcel}
+                  title="File Excel có cột Số thăm — import lại sẽ dựng đúng các sơ đồ này"
+                  className="rounded-lg bg-emerald-700 px-4 py-2 text-base font-semibold text-white hover:bg-emerald-800"
+                >
+                  ⬇ Xuất Excel kèm số thăm
+                </button>
+                <button
                   onClick={() => gotoCategory(1)}
-                  className="rounded bg-white px-3 py-1.5 text-sm font-semibold shadow hover:bg-gray-50"
+                  className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50"
                 >
                   Tiếp ›
                 </button>
@@ -1059,17 +1190,17 @@ export default function DrawScreen() {
           {bracketData ? (
             <div>
               <div className="mb-2 flex flex-wrap items-center gap-3">
-                <p className="text-sm text-gray-500">
+                <p className="text-base text-gray-600">
                   💡 <b>Kéo VĐV từ danh sách</b> vào ô · <b>kéo-thả</b> trong sơ đồ để đổi chỗ ·{' '}
                   <b>nhấp đúp</b> để sửa tên · di chuột hiện nút <b>×</b> để xóa · <b>Ctrl+Z</b> hoàn tác
                 </p>
-                <label className="flex items-center gap-1 text-sm text-gray-600">
+                <label className="flex items-center gap-1.5 text-base text-gray-700">
                   Tô vàng đơn vị:
                   <input
                     value={highlightUnit}
                     onChange={(e) => setHighlightUnit(e.target.value)}
                     placeholder="VD: Phường Duyên Hải"
-                    className="rounded border border-gray-300 px-2 py-1 text-sm"
+                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-base"
                   />
                 </label>
               </div>
@@ -1079,7 +1210,7 @@ export default function DrawScreen() {
                 onRemove={handleBenchRemove}
               />
               <div className="overflow-x-auto bg-white p-4">
-                <div className="mb-2 bg-gray-700 px-3 py-1.5 text-sm font-bold uppercase text-white">
+                <div className="mb-2 rounded bg-gray-700 px-3 py-2 text-base font-bold uppercase text-white">
                   {bracketData.category}
                 </div>
                 <Bracket
@@ -1093,7 +1224,7 @@ export default function DrawScreen() {
               </div>
             </div>
           ) : (
-            <div className="flex h-64 items-center justify-center rounded border-2 border-dashed border-gray-300 px-4 text-center text-gray-400">
+            <div className="flex h-64 items-center justify-center rounded-lg border-2 border-dashed border-gray-300 px-4 text-center text-lg text-gray-400">
               {categories.length === 0
                 ? 'Import file để bắt đầu'
                 : drawnCount > 0
