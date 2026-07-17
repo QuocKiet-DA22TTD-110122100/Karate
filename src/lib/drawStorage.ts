@@ -15,6 +15,13 @@ export interface DrawState {
   brackets: Record<string, BracketData>;
   /** Per-class "waiting bench": athletes pulled out of the bracket. */
   benches: Record<string, RosterEntry[]>;
+  /**
+   * Athletes of deleted weight classes, parked here instead of being erased so
+   * deleting a class can never silently lose people. Kept OUT of allAthletes on
+   * purpose: regrouping rebuilds classes from allAthletes, and would otherwise
+   * recreate the class that was just deleted.
+   */
+  unassigned: AthleteRecord[];
   fileName: string;
 }
 

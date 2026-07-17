@@ -218,12 +218,15 @@ export default function DrawScreen() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const exportRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [exporting, setExporting] = useState(false);
-  const [highlightUnit, setHighlightUnit] = useState('');
   const [allAthletes, setAllAthletes] = useState<AthleteRecord[]>(
     () => loadDraw().allAthletes ?? []
   );
   const [categories, setCategories] = useState<CategoryInfo[]>(
     () => loadDraw().categories ?? []
+  );
+  // VĐV của các hạng cân đã xóa — giữ lại để khôi phục, không mất ai.
+  const [unassigned, setUnassigned] = useState<AthleteRecord[]>(
+    () => loadDraw().unassigned ?? []
   );
   const [activeKey, setActiveKey] = useState<string>('');
   const [bracketHist, dispatch] = useReducer(
@@ -269,11 +272,11 @@ export default function DrawScreen() {
   // Mirror the whole draw to localStorage (debounced) whenever it changes.
   useEffect(() => {
     const t = setTimeout(
-      () => saveDraw({ allAthletes, categories, brackets, benches, fileName }),
+      () => saveDraw({ allAthletes, categories, brackets, benches, unassigned, fileName }),
       300
     );
     return () => clearTimeout(t);
-  }, [allAthletes, categories, brackets, benches, fileName]);
+  }, [allAthletes, categories, brackets, benches, unassigned, fileName]);
 
   // Keyboard shortcuts for undo/redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y).
   // Ignored while typing in a field — there Ctrl+Z must stay the text undo,
@@ -316,6 +319,11 @@ export default function DrawScreen() {
   const ingestSheets = useCallback((sheets: Sheet[], fileLabel: string): ImportReport | null => {
     const incoming = buildRecords(sheets);
     if (incoming.length === 0) return null;
+
+    // Ai có mặt trong file import thì rời khỏi chỗ "chưa xếp hạng" — import lại
+    // file cũ sẽ đưa họ về hạng cân bình thường, không nằm hai nơi cùng lúc.
+    const incomingKeys = new Set(incoming.map(recordKey));
+    setUnassigned((prev) => prev.filter((u) => !incomingKeys.has(recordKey(u))));
 
     setAllAthletes((prev) => {
       const seen = new Set(prev.map(recordKey));
@@ -441,6 +449,7 @@ export default function DrawScreen() {
     if (!confirm('Xóa toàn bộ danh sách đã import?')) return;
     setAllAthletes([]);
     setCategories([]);
+    setUnassigned([]);
     setActiveKey('');
     setEditingRoster([]);
     dispatch({ type: 'reset', value: { brackets: {}, benches: {} } });
@@ -837,11 +846,13 @@ export default function DrawScreen() {
       categories: incoming.categories ?? [],
       brackets: incoming.brackets ?? {},
       benches: incoming.benches ?? {},
+      unassigned: incoming.unassigned ?? [],
       fileName: incoming.fileName ?? '',
     });
     const d = loadDraw();
     setAllAthletes(d.allAthletes ?? []);
     setCategories(d.categories ?? []);
+    setUnassigned(d.unassigned ?? []);
     dispatch({
       type: 'reset',
       value: { brackets: d.brackets ?? {}, benches: d.benches ?? {} },
@@ -873,15 +884,25 @@ export default function DrawScreen() {
   const handleDeleteCategory = useCallback(
     (key: string) => {
       const cat = categories.find((c) => c.key === key);
-      if (!cat || !confirm(`Xóa hạng cân "${cat.label}" (${cat.athletes.length} VĐV)?`)) return;
+      if (!cat) return;
+      const msg =
+        cat.athletes.length > 0
+          ? `Xóa hạng cân "${cat.label}"?\n${cat.athletes.length} VĐV sẽ chuyển vào mục "VĐV chưa xếp hạng" (không bị mất, khôi phục lại được).`
+          : `Xóa hạng cân "${cat.label}" (0 VĐV)?`;
+      if (!confirm(msg)) return;
       setCategories((cats) => cats.filter((c) => c.key !== key));
-      // Drop the class's athletes from the master roster too, so the total and
-      // the all-athletes list stay in step with what's left.
+      // Rút VĐV của hạng khỏi danh sách gốc (để gom nhóm lại không tự tạo lại
+      // hạng vừa xóa) nhưng KHÔNG xóa hẳn — họ nằm ở "VĐV chưa xếp hạng".
       setAllAthletes((prev) =>
         prev
           .filter((a) => categoryKey(a.category, a.ageGroup, a.gender) !== key)
           .map((r, i) => ({ ...r, stt: i + 1 }))
       );
+      setUnassigned((prev) => {
+        const seen = new Set(prev.map(recordKey));
+        const moved = cat.athletes.filter((a) => !seen.has(recordKey(a)));
+        return [...prev, ...moved];
+      });
       dispatch({
         type: 'mutate',
         fn: (s) => {
@@ -891,12 +912,66 @@ export default function DrawScreen() {
         },
       });
       if (activeKey === key) {
-        setActiveKey(categories.length > 1 ? categories.find((c) => c.key !== key)!.key : '');
-        setEditingRoster([]);
+        // Nạp luôn danh sách của hạng thay thế, kẻo bảng bên trái trống dù
+        // hạng đó có VĐV.
+        const fallback = categories.find((c) => c.key !== key);
+        setActiveKey(fallback ? fallback.key : '');
+        setEditingRoster(
+          fallback
+            ? fallback.athletes.map((a, i) => ({ stt: i + 1, name: a.name, unit: a.unit }))
+            : []
+        );
       }
     },
     [categories, activeKey]
   );
+
+  // Đưa VĐV "chưa xếp hạng" trở về đúng hạng cân cũ (tạo lại hạng nếu đã xóa).
+  // Dùng chung cho khôi phục từng người và khôi phục tất cả.
+  const restoreUnassigned = useCallback((recs: AthleteRecord[]) => {
+    if (recs.length === 0) return;
+    const keys = new Set(recs.map(recordKey));
+    setUnassigned((prev) => prev.filter((u) => !keys.has(recordKey(u))));
+    setAllAthletes((prev) => {
+      const seen = new Set(prev.map(recordKey));
+      const merged = [...prev];
+      for (const r of recs) {
+        const k = recordKey(r);
+        if (!seen.has(k)) {
+          seen.add(k);
+          merged.push({ ...r });
+        }
+      }
+      return merged.map((r, i) => ({ ...r, stt: i + 1 }));
+    });
+    setCategories((prev) => {
+      const map = new Map<string, CategoryInfo>(
+        prev.map((c) => [c.key, { ...c, athletes: [...c.athletes] }])
+      );
+      for (const r of recs) {
+        const key = categoryKey(r.category, r.ageGroup, r.gender);
+        let cat = map.get(key);
+        if (!cat) {
+          cat = { key, label: categoryLabel(r.category, r.ageGroup, r.gender), athletes: [] };
+          map.set(key, cat);
+        }
+        if (!cat.athletes.some((a) => recordKey(a) === recordKey(r))) {
+          cat.athletes.push({ ...r });
+        }
+      }
+      const list = [...map.values()];
+      list.sort((a, b) => a.label.localeCompare(b.label, 'vi'));
+      for (const c of list) c.athletes = c.athletes.map((a, i) => ({ ...a, stt: i + 1 }));
+      return list;
+    });
+  }, []);
+
+  // Xóa hẳn một VĐV khỏi mục "chưa xếp hạng" — bước xóa thật sự duy nhất.
+  const deleteUnassigned = useCallback((rec: AthleteRecord) => {
+    if (!confirm(`Xóa hẳn VĐV "${rec.name}" (${rec.unit})? Sẽ không khôi phục được.`)) return;
+    const rk = recordKey(rec);
+    setUnassigned((prev) => prev.filter((u) => recordKey(u) !== rk));
+  }, []);
 
   // Edit any field of an athlete in the master list. Changing weight/age/gender
   // re-groups the classes, moving the athlete to (or creating) the right one.
@@ -973,7 +1048,7 @@ export default function DrawScreen() {
       <CloudSyncDialog
         open={cloudOpen}
         onClose={() => setCloudOpen(false)}
-        getState={() => ({ allAthletes, categories, brackets, benches, fileName })}
+        getState={() => ({ allAthletes, categories, brackets, benches, unassigned, fileName })}
         onLoaded={handleCloudLoaded}
         hasLocalData={allAthletes.length > 0 || drawnCount > 0}
       />
@@ -1062,7 +1137,7 @@ export default function DrawScreen() {
                   ✔ File có sẵn <b>số thăm</b> cho {importReport.drawnClasses.length} hạng —
                   sơ đồ đã được dựng đúng theo kết quả bốc thăm trong file:{' '}
                   {importReport.drawnClasses.join(', ')}. VĐV thiếu/trùng số thăm nằm ở
-                  ghế chờ.
+                  hàng đợi.
                 </p>
               )}
             </div>
@@ -1086,8 +1161,8 @@ export default function DrawScreen() {
         </div>
       )}
 
-      {/* Weight classes as cards (replaces the dropdown). Pick a card to show its
-          bracket; each card runs its own draw / edit / add / delete. */}
+      {/* Weight-class dropdown (bảng xổ lựa chọn) + action row for the selected
+          class: draw / edit / add / delete. */}
       <CategoryCards
         categories={categories}
         activeKey={activeKey}
@@ -1110,6 +1185,54 @@ export default function DrawScreen() {
         }}
         onDelete={handleDeleteCategory}
       />
+
+      {/* VĐV của các hạng cân đã xóa — nằm chờ ở đây, không ai bị mất. */}
+      {unassigned.length > 0 && (
+        <div className="mb-4 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-bold text-amber-900">
+              🗂 VĐV chưa xếp hạng ({unassigned.length})
+            </h3>
+            <span className="text-xs text-amber-800">
+              — VĐV của hạng cân đã xóa, chưa bị mất. Bấm ↩ để trả về hạng cũ.
+            </span>
+            <button
+              onClick={() => restoreUnassigned(unassigned)}
+              className="ml-auto rounded bg-green-600 px-3 py-1 text-xs font-semibold text-white hover:bg-green-700"
+            >
+              ↩ Khôi phục tất cả
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {unassigned.map((a) => (
+              <div
+                key={recordKey(a)}
+                className="flex items-center gap-1.5 rounded border border-amber-300 bg-white py-1 pl-2 pr-1 text-sm"
+              >
+                <span className="font-semibold">{a.name}</span>
+                <span className="text-xs text-gray-600">({a.unit})</span>
+                <span className="text-xs text-gray-500">
+                  · {categoryLabel(a.category, a.ageGroup, a.gender)}
+                </span>
+                <button
+                  onClick={() => restoreUnassigned([a])}
+                  title="Khôi phục về hạng cân cũ"
+                  className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-semibold text-green-700 hover:bg-green-200"
+                >
+                  ↩
+                </button>
+                <button
+                  onClick={() => deleteUnassigned(a)}
+                  title="Xóa hẳn (không khôi phục được)"
+                  className="grid h-5 w-5 place-items-center rounded bg-red-600 text-[11px] font-bold leading-none text-white opacity-60 hover:opacity-100"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex flex-wrap gap-8">
@@ -1199,25 +1322,47 @@ export default function DrawScreen() {
                 : 'Chọn một hạng cân để xem danh sách'}
             </div>
           )}
+
+          {/* Hàng đợi nằm dưới danh sách VĐV: kéo từ sơ đồ (cột phải) thả vào
+              đây để cất, kéo ngược lại để trả về sơ đồ. */}
+          {bracketData && (
+            <div className="mt-4">
+              <BenchPanel
+                bench={bench}
+                onDropFromBracket={handleBenchDrop}
+                onRemove={handleBenchRemove}
+              />
+            </div>
+          )}
         </div>
 
         {/* Right: Bracket + pager */}
         <div className="min-w-[500px] flex-1">
           {drawnCount > 0 && categories.length > 0 && (
-            <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-gray-100 px-3 py-2.5">
-              <button
-                onClick={() => gotoCategory(-1)}
-                className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50"
-              >
-                ‹ Trước
-              </button>
-              <div className="text-center leading-tight">
-                <div className="text-base font-bold">{currentCategory?.label}</div>
-                <div className="text-sm text-gray-500">
-                  Hạng {catIndex + 1}/{categories.length} · Đã bốc {drawnCount}
+            <div className="mb-3 rounded-lg bg-gray-100 px-3 py-2.5">
+              {/* Hàng 1: điều hướng giữa các hạng cân */}
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  onClick={() => gotoCategory(-1)}
+                  className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50"
+                >
+                  ‹ Trước
+                </button>
+                <div className="text-center leading-tight">
+                  <div className="text-lg font-bold">{currentCategory?.label}</div>
+                  <div className="text-sm text-gray-500">
+                    Hạng {catIndex + 1}/{categories.length} · Đã bốc {drawnCount}
+                  </div>
                 </div>
+                <button
+                  onClick={() => gotoCategory(1)}
+                  className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50"
+                >
+                  Tiếp ›
+                </button>
               </div>
-              <div className="flex flex-wrap gap-2">
+              {/* Hàng 2: hoàn tác/làm lại + các nút xuất file */}
+              <div className="mt-2 flex flex-wrap items-center justify-center gap-2 border-t border-gray-200 pt-2">
                 <button
                   onClick={undo}
                   disabled={!canUndo}
@@ -1234,6 +1379,7 @@ export default function DrawScreen() {
                 >
                   ↷ Làm lại
                 </button>
+                <span className="mx-1 h-8 w-px bg-gray-300" />
                 <button
                   onClick={handleExportPdf}
                   disabled={!bracketData || exporting}
@@ -1255,51 +1401,22 @@ export default function DrawScreen() {
                 >
                   ⬇ Xuất Excel kèm số thăm
                 </button>
-                <button
-                  onClick={() => gotoCategory(1)}
-                  className="rounded-lg bg-white px-4 py-2 text-base font-semibold shadow hover:bg-gray-50"
-                >
-                  Tiếp ›
-                </button>
               </div>
             </div>
           )}
 
           {bracketData ? (
-            <div>
-              <div className="mb-2 flex flex-wrap items-center gap-3">
-                <p className="text-base text-gray-600">
-                  💡 <b>Kéo VĐV từ danh sách</b> vào ô · <b>kéo-thả</b> trong sơ đồ để đổi chỗ ·{' '}
-                  <b>nhấp đúp</b> để sửa tên · di chuột hiện nút <b>×</b> để xóa · <b>Ctrl+Z</b> hoàn tác
-                </p>
-                <label className="flex items-center gap-1.5 text-base text-gray-700">
-                  Tô vàng đơn vị:
-                  <input
-                    value={highlightUnit}
-                    onChange={(e) => setHighlightUnit(e.target.value)}
-                    placeholder="VD: Phường Duyên Hải"
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-base"
-                  />
-                </label>
+            <div className="overflow-x-auto bg-white p-4">
+              <div className="mb-2 rounded bg-gray-700 px-3 py-2 text-base font-bold uppercase text-white">
+                {bracketData.category}
               </div>
-              <BenchPanel
-                bench={bench}
-                onDropFromBracket={handleBenchDrop}
-                onRemove={handleBenchRemove}
+              <Bracket
+                data={bracketData}
+                onSwapSlots={handleSwap}
+                onClearSlot={handleClearSlot}
+                onSetSlot={handleSetSlot}
+                onDropAthlete={handleDropAthlete}
               />
-              <div className="overflow-x-auto bg-white p-4">
-                <div className="mb-2 rounded bg-gray-700 px-3 py-2 text-base font-bold uppercase text-white">
-                  {bracketData.category}
-                </div>
-                <Bracket
-                  data={bracketData}
-                  onSwapSlots={handleSwap}
-                  onClearSlot={handleClearSlot}
-                  onSetSlot={handleSetSlot}
-                  onDropAthlete={handleDropAthlete}
-                  highlightUnit={highlightUnit}
-                />
-              </div>
             </div>
           ) : (
             <div className="flex h-64 items-center justify-center rounded-lg border-2 border-dashed border-gray-300 px-4 text-center text-lg text-gray-400">
@@ -1328,7 +1445,7 @@ export default function DrawScreen() {
               <div className="mb-2 bg-gray-700 px-3 py-1.5 text-sm font-bold uppercase text-white">
                 {brackets[c.key].category}
               </div>
-              <Bracket data={brackets[c.key]} highlightUnit={highlightUnit} />
+              <Bracket data={brackets[c.key]} />
             </div>
           ))}
       </div>

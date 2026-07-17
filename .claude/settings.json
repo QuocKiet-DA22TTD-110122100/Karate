@@ -5,7 +5,14 @@
       "Bash(rm -rf .playwright-mcp && rm -f *.png && npm run build 2>&1 | tail -2; echo \"--- artifacts:\"; ls | grep -iE \"playwright|\\\\.png$\" || echo \"none\")",
       "mcp__playwright__browser_close",
       "Bash(powershell.exe -NoProfile -Command 'Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '\\\\''*ms-playwright*'\\\\'' } | Stop-Process -Force; '\\\\''killed playwright chrome'\\\\''')",
-      "PowerShell(git add -A)"
+      "PowerShell(git add -A)",
+      "mcp__playwright__browser_find",
+      "mcp__playwright__browser_type",
+      "PowerShell(node \"C:\\\\Users\\\\quock\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Thuctap-karate-tournament\\\\f50d77cb-5f4a-4be0-bf42-0700cedce3ff\\\\scratchpad\\\\check-export.mjs\")",
+      "PowerShell(node \"C:\\\\Users\\\\quock\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Thuctap-karate-tournament\\\\f50d77cb-5f4a-4be0-bf42-0700cedce3ff\\\\scratchpad\\\\check-edge.mjs\")",
+      "PowerShell(git push origin main)",
+      "PowerShell(gh run list --repo QuocKiet-DA22TTD-110122100/Karate --limit 2)",
+      "PowerShell($r = Invoke-RestMethod \"https://api.github.com/repos/QuocKiet-DA22TTD-110122100/Karate/actions/runs?per_page=2\"; $r.workflow_runs | Select-Object name, status, conclusion, head_sha, created_at | Format-Table -AutoSize)"
     ],
     "additionalDirectories": [
       "C:\\Thuctap\\karate-tournament"

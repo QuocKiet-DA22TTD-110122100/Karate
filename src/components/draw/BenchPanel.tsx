@@ -37,7 +37,7 @@ export default function BenchPanel({ bench, onDropFromBracket, onRemove }: Bench
       }`}
     >
       <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-gray-700">
-        🪑 Bàn chờ (VĐV đã kéo ra){' '}
+        🪑 Hàng đợi (VĐV đã kéo ra){' '}
         <span className="rounded-full bg-gray-200 px-2 text-xs">{bench.length}</span>
         <span className="font-normal text-gray-400">— kéo vào đây để cất, kéo ra sơ đồ để trả lại</span>
       </div>
@@ -65,7 +65,7 @@ export default function BenchPanel({ bench, onDropFromBracket, onRemove }: Bench
               <button
                 onClick={() => onRemove(a.name, a.unit)}
                 className="grid h-4 w-4 place-items-center rounded bg-red-600 text-[11px] font-bold leading-none text-white opacity-60 hover:opacity-100"
-                title="Xóa hẳn khỏi bàn chờ"
+                title="Xóa hẳn khỏi hàng đợi"
               >
                 ×
               </button>
