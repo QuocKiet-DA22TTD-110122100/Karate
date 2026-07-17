@@ -5,10 +5,6 @@ const MATCH_SECONDS = 120; // default 2:00
 export const MATCH_DURATIONS = [10, 15, 30, 60, 90, 120, 180] as const; // 0:10 / 0:15 / 0:30 / 1:00 / 1:30 / 2:00 / 3:00
 const WIN_MARGIN = 8; // an 8-point lead ends the match
 const FINAL_FOUL = 'H'; // reaching this foul hands the win to the opponent
-// An HC forfeits the offender's own VR only in the final stretch — once the
-// 15-second warning bell has sounded. Earlier HCs leave VR in place; removing
-// it then is the referee's explicit call (press the VR button).
-const SENSHU_FORFEIT_AT = 15; // seconds remaining
 // Penalty codes as shown on the kumite board, left→right for the AO side.
 export const PENALTY_CODES = ['C1', 'C2', 'C3', 'HC', 'H'] as const;
 
@@ -278,10 +274,8 @@ export const useMatchStore = create<MatchState>((set) => ({
         patch.foulNotice = null;
         patch.foulNoticeUntil = null;
       }
-      // A HC in the last 15 seconds forfeits that competitor's own VR advantage.
-      if (adding && code === 'HC' && s.senshu === side && s.seconds <= SENSHU_FORFEIT_AT) {
-        patch.senshu = null;
-      }
+      // VR is never touched here: awarding and removing senshu are the
+      // operator's explicit calls via the VR button, whatever fouls are given.
       // Reaching the final foul hands the win to the opponent.
       if (next.includes(FINAL_FOUL)) {
         patch.winner = other(side);
