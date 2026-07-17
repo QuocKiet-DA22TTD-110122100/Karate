@@ -17,3 +17,4 @@ dist
 # Real competitor rosters — personal data of minors, kept out of the repo
 *.pdf
 *.csv
+*.xlsx

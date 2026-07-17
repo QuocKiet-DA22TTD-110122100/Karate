@@ -146,10 +146,17 @@ export function useTournamentRunner(drive: boolean): Runner {
     setActive(state.activeKey, null); // nothing left to run
   }, [categories, draw, loadBout, setActive]);
 
-  // Record the winner of the bout on the mat, exactly once.
+  // Record the winner of the bout on the mat, exactly once per decision. The
+  // stamp stops a re-render loop (recording changes results, which recomputes
+  // the bout); clearing it when the winner is cleared lets a re-fought bout
+  // ("Đấu lại") overwrite the earlier, wrong result.
   const recorded = useRef<string | null>(null);
   useEffect(() => {
-    if (!drive || !useDraw || !winner || !activeBout || !activeKey) return;
+    if (!winner) {
+      recorded.current = null;
+      return;
+    }
+    if (!drive || !useDraw || !activeBout || !activeKey) return;
     const stamp = `${activeKey}:${activeBout.no}`;
     if (recorded.current === stamp) return;
     const champ = winner === 'aka' ? activeBout.aka : activeBout.ao;

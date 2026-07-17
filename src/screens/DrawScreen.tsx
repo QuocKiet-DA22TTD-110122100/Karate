@@ -274,9 +274,21 @@ export default function DrawScreen() {
   }, [allAthletes, categories, brackets, benches, fileName]);
 
   // Keyboard shortcuts for undo/redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y).
+  // Ignored while typing in a field — there Ctrl+Z must stay the text undo,
+  // not silently rewind the bracket.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.tagName === 'SELECT' ||
+          el.isContentEditable)
+      ) {
+        return;
+      }
       const k = e.key.toLowerCase();
       if (k === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -522,23 +534,31 @@ export default function DrawScreen() {
       .map((r, i) => ({ ...r, stt: i + 1 }));
 
     if (currentCategory) {
+      // Class identity comes from the key, not from the first athlete — a
+      // hand-opened empty class has nobody to copy it from.
+      const [weight = '', ageGroup = '', gender = ''] = activeKey.split('|');
+      const toRecord = (r: RosterEntry, i: number): AthleteRecord => ({
+        stt: i + 1,
+        name: r.name,
+        unit: r.unit,
+        category: weight,
+        ageGroup,
+        gender,
+      });
       setCategories((cats) =>
         cats.map((c) =>
-          c.key === activeKey
-            ? {
-                ...c,
-                athletes: cleaned.map((r, i) => ({
-                  stt: i + 1,
-                  name: r.name,
-                  unit: r.unit,
-                  category: currentCategory.athletes[0]?.category || '',
-                  ageGroup: currentCategory.athletes[0]?.ageGroup || '',
-                  gender: currentCategory.athletes[0]?.gender || '',
-                })),
-              }
-            : c
+          c.key === activeKey ? { ...c, athletes: cleaned.map(toRecord) } : c
         )
       );
+      // Mirror into the master roster too. Without this, a hand-added athlete
+      // exists only inside the class — the totals disagree, and the next
+      // regroupCategories (rebuilt from allAthletes) silently drops them.
+      setAllAthletes((prev) => {
+        const others = prev.filter(
+          (a) => categoryKey(a.category, a.ageGroup, a.gender) !== activeKey
+        );
+        return [...others, ...cleaned.map(toRecord)].map((r, i) => ({ ...r, stt: i + 1 }));
+      });
     }
     setEditingRoster(cleaned);
     setIsEditing(false);

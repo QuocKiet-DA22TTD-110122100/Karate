@@ -50,10 +50,21 @@ export default function CategoryCards({
         const active = c.key === activeKey;
         const drawn = drawnKeys.has(c.key);
         return (
-          <button
+          // A div with button semantics, not a real <button>: the card holds the
+          // ✕/bốc/sửa/thêm buttons inside it, and HTML forbids nested buttons
+          // (browsers may fire both on one click).
+          <div
             key={c.key}
+            role="button"
+            tabIndex={0}
             onClick={() => onSelect(c.key)}
-            className={`relative flex flex-col gap-2 rounded-xl border-2 p-3 text-left transition-colors ${
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSelect(c.key);
+              }
+            }}
+            className={`relative flex cursor-pointer flex-col gap-2 rounded-xl border-2 p-3 text-left transition-colors ${
               active
                 ? 'border-red-500 bg-red-50 ring-2 ring-red-200'
                 : 'border-gray-200 bg-gray-100 hover:border-gray-400'
@@ -83,7 +94,7 @@ export default function CategoryCards({
               <CardButton label="sửa" onClick={() => onEdit(c.key)} />
               <CardButton label="thêm" onClick={() => onAdd(c.key)} />
             </div>
-          </button>
+          </div>
         );
       })}
     </div>

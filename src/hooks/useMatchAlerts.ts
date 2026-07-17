@@ -16,17 +16,24 @@ export function useMatchAlerts(): MatchAlerts {
   const running = useMatchStore((s) => s.running);
   const winner = useMatchStore((s) => s.winner);
   const prev = useRef(seconds);
+  const prevRunning = useRef(running);
 
   useEffect(() => {
     const before = prev.current;
+    const wasRunning = prevRunning.current;
     prev.current = seconds;
+    prevRunning.current = running;
+    // Sound only for a live clock. The final tick flips running off in the same
+    // update it reaches 0, so "was running" must count too — but hand-editing
+    // the time or picking a short duration while stopped stays silent.
+    if (!running && !wasRunning) return;
     if (before > WARNING_AT && seconds <= WARNING_AT && seconds > 0) {
       playWarning();
     }
     if (before > 0 && seconds === 0) {
       playEnd();
     }
-  }, [seconds]);
+  }, [seconds, running]);
 
   return {
     warningPhase: running && !winner && seconds > 0 && seconds <= WARNING_AT,
