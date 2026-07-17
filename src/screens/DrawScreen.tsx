@@ -778,29 +778,45 @@ export default function DrawScreen() {
   // file re-imports as-is and rebuilds the same brackets — the official record.
   const handleExportExcel = useCallback(() => {
     const rows: Record<string, string | number>[] = [];
+    // Trimmed like sameAthlete, so a stray space can't cost someone their lot.
+    const idKey = (name: string, unit: string) => `${name.trim()}|${unit.trim()}`.toLowerCase();
     for (const c of categories) {
       const br = brackets[c.key];
       const lotMap = new Map<string, number | ''>();
+      // People the brackets know but the roster doesn't — typed straight into a
+      // slot. The printed draw shows them, so the export must too.
+      const extras = new Map<string, RosterEntry>();
       if (br) {
         for (const s of br.slots) {
           if (s.athlete) {
-            const key = `${s.athlete.name}|${s.athlete.unit}`.toLowerCase();
+            const key = idKey(s.athlete.name, s.athlete.unit);
             lotMap.set(key, s.position);
+            extras.set(key, s.athlete);
           }
         }
         for (const a of benches[c.key] ?? []) {
-          const key = `${a.name}|${a.unit}`.toLowerCase();
+          const key = idKey(a.name, a.unit);
           if (!lotMap.has(key)) lotMap.set(key, '');
+          if (!extras.has(key)) extras.set(key, a);
         }
       }
       for (const a of c.athletes) {
-        const key = `${a.name}|${a.unit}`.toLowerCase();
+        const key = idKey(a.name, a.unit);
+        extras.delete(key);
         const lot = lotMap.get(key);
         rows.push({
           'Họ và tên': a.name,
           'Đơn vị': a.unit,
           'Hạng cân': c.label,
           'Số thăm': lot === undefined ? '' : lot,
+        });
+      }
+      for (const [key, a] of extras) {
+        rows.push({
+          'Họ và tên': a.name,
+          'Đơn vị': a.unit,
+          'Hạng cân': c.label,
+          'Số thăm': lotMap.get(key) ?? '',
         });
       }
     }
