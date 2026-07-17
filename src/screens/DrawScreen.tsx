@@ -6,6 +6,7 @@ import BenchPanel from '../components/draw/BenchPanel';
 import Bracket from '../components/draw/Bracket';
 import AddCategoryDialog from '../components/draw/AddCategoryDialog';
 import CategoryCards from '../components/draw/CategoryCards';
+import CloudSyncDialog from '../components/draw/CloudSyncDialog';
 import {
   generateBracket,
   swapSlots,
@@ -23,7 +24,7 @@ import {
   categoryLabel,
 } from '../lib/normalize';
 import { extractRowsFromPdf } from '../lib/pdf';
-import { loadDraw, saveDraw } from '../lib/drawStorage';
+import { loadDraw, saveDraw, type DrawState } from '../lib/drawStorage';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useNavigate } from 'react-router-dom';
@@ -248,6 +249,7 @@ export default function DrawScreen() {
   const [showAll, setShowAll] = useState(true);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [addingCategory, setAddingCategory] = useState(false);
+  const [cloudOpen, setCloudOpen] = useState(false);
 
   // Offer the values the file already uses, so a hand-added class groups with
   // the imported ones instead of forming a near-duplicate.
@@ -810,6 +812,31 @@ export default function DrawScreen() {
     XLSX.writeFile(wb, 'danh-sach-boc-tham.xlsx');
   }, [categories, brackets, benches]);
 
+  // Replace the whole local draw with what came down from the cloud. Written
+  // through saveDraw → loadDraw so the stored copy and the relabelling logic
+  // stay the single path every load goes through.
+  const handleCloudLoaded = useCallback((incoming: Partial<DrawState>) => {
+    saveDraw({
+      allAthletes: incoming.allAthletes ?? [],
+      categories: incoming.categories ?? [],
+      brackets: incoming.brackets ?? {},
+      benches: incoming.benches ?? {},
+      fileName: incoming.fileName ?? '',
+    });
+    const d = loadDraw();
+    setAllAthletes(d.allAthletes ?? []);
+    setCategories(d.categories ?? []);
+    dispatch({
+      type: 'reset',
+      value: { brackets: d.brackets ?? {}, benches: d.benches ?? {} },
+    });
+    setFileName(d.fileName ?? '');
+    setActiveKey('');
+    setEditingRoster([]);
+    setShowAll(true);
+    setImportReport(null);
+  }, []);
+
   // Open an empty class picked from the dialog. Values come from the roster's own
   // vocabulary, so the key matches an imported class exactly if one appears later.
   const handleAddCategory = useCallback(
@@ -927,6 +954,14 @@ export default function DrawScreen() {
         existingKeys={existingKeys}
       />
 
+      <CloudSyncDialog
+        open={cloudOpen}
+        onClose={() => setCloudOpen(false)}
+        getState={() => ({ allAthletes, categories, brackets, benches, fileName })}
+        onLoaded={handleCloudLoaded}
+        hasLocalData={allAthletes.length > 0 || drawnCount > 0}
+      />
+
       {/* Toolbar — grouped into one clear control bar with large, labelled buttons */}
       <div className="mb-4 flex flex-wrap items-center gap-2.5 rounded-xl border border-gray-200 bg-gray-50 p-3">
         <input
@@ -966,6 +1001,13 @@ export default function DrawScreen() {
           }`}
         >
           {showAll ? '👁 Tất cả VĐV' : '📋 Theo hạng cân'}
+        </button>
+        <button
+          onClick={() => setCloudOpen(true)}
+          title="Lưu sơ đồ lên đám mây / tải về từ máy khác"
+          className="rounded-lg bg-sky-600 px-5 py-2.5 text-base font-semibold text-white shadow-sm hover:bg-sky-700"
+        >
+          ☁ Đồng bộ máy khác
         </button>
         {allAthletes.length > 0 && (
           <button
