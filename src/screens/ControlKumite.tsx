@@ -126,6 +126,27 @@ function DurationInput({
   );
 }
 
+/**
+ * Seconds left before a reached 8-point gap becomes the win, or null when no
+ * gap is pending. The drive window is also the one that fires the decision
+ * when the countdown runs out — the board only mirrors the outcome.
+ */
+function usePendingWin(drive: boolean): number | null {
+  const until = useMatchStore((s) => s.pendingWinUntil);
+  const finalize = useMatchStore((s) => s.finalizePendingWin);
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (until == null) return;
+    const id = setInterval(() => {
+      force((n) => n + 1);
+      if (drive && Date.now() >= until) finalize();
+    }, 250);
+    return () => clearInterval(id);
+  }, [until, drive, finalize]);
+  if (until == null) return null;
+  return Math.max(0, Math.ceil((until - Date.now()) / 1000));
+}
+
 // A key cap printed in the corner of a control.
 function KeyHint({ children }: Readonly<{ children: string }>) {
   return (
@@ -442,6 +463,8 @@ function SettingsPanel() {
   const setFoulNoticeSec = useMatchStore((s) => s.setFoulNoticeSec);
   const pointNoticeSec = useMatchStore((s) => s.pointNoticeSec);
   const setPointNoticeSec = useMatchStore((s) => s.setPointNoticeSec);
+  const winGraceSec = useMatchStore((s) => s.winGraceSec);
+  const setWinGraceSec = useMatchStore((s) => s.setWinGraceSec);
   const autoAdvanceSec = useTournamentStore((s) => s.autoAdvanceSec);
   const setAutoAdvanceSec = useTournamentStore((s) => s.setAutoAdvanceSec);
   const category = useMatchStore((s) => s.category);
@@ -474,6 +497,14 @@ function SettingsPanel() {
         min={0}
         max={60}
         onChange={setAutoAdvanceSec}
+      />
+      <SecondsField
+        label="Chờ chốt thắng 8 điểm"
+        hint="Đợi cộng nốt điểm bên kia (0 = chốt ngay)"
+        value={winGraceSec}
+        min={0}
+        max={60}
+        onChange={setWinGraceSec}
       />
       <label className="flex flex-col gap-1 text-sm">
         <span className="font-medium text-neutral-700">Hạng cân / lứa tuổi</span>
@@ -528,6 +559,11 @@ export default function ControlKumite() {
   // Only this window drives the running order; the projected board just mirrors.
   const runner = useTournamentRunner(true);
   useKumiteHotkeys(runner.advanceNow);
+  const pendingWinSec = usePendingWin(true);
+  const finalizePendingWin = useMatchStore((s) => s.finalizePendingWin);
+  const leader = useMatchStore((s) =>
+    s.scoreAo === s.scoreAka ? null : s.scoreAo > s.scoreAka ? 'AO' : 'AKA'
+  );
 
   return (
     <div className="min-h-screen w-full bg-neutral-100 px-3 py-2 text-neutral-900">
@@ -575,6 +611,24 @@ export default function ControlKumite() {
 
         {/* Only ever up when the match ran level to the very end. */}
         <FlagVotePanel />
+
+        {/* The 8-point gap has been reached but not yet turned into the win:
+            the referee may have called points for both sides in one stoppage,
+            so scoring stays open until this countdown runs out. */}
+        {pendingWinSec != null && !winner && (
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-amber-500 px-5 py-2.5 text-base font-bold text-white">
+            <span>
+              ⏳ {leader} đang cách biệt ≥ 8 điểm — chốt thắng sau <b>{pendingWinSec}s</b>.
+              Nếu trọng tài cho cả hai bên điểm, cộng nốt bên kia ngay.
+            </span>
+            <button
+              onClick={() => finalizePendingWin(true)}
+              className="shrink-0 rounded bg-white/90 px-4 py-1 text-base font-semibold text-neutral-900 hover:bg-white"
+            >
+              Chốt ngay
+            </button>
+          </div>
+        )}
 
         {winner && (
           <div

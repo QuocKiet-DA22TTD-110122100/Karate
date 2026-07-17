@@ -90,6 +90,8 @@ export function initMatchSync(): void {
       pointNotice: s.pointNotice,
       pointNoticeUntil: s.pointNoticeUntil,
       pointNoticeSec: s.pointNoticeSec,
+      pendingWinUntil: s.pendingWinUntil,
+      winGraceSec: s.winGraceSec,
     }),
   });
 }

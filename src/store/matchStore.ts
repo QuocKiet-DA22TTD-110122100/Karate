@@ -24,7 +24,43 @@ export const AWARD_VALUES = [3, 2, 1] as const;
 export const DEFAULT_FOUL_NOTICE_SEC = 10;
 export const DEFAULT_POINT_NOTICE_SEC = 3;
 
+/**
+ * Grace window before an 8-point gap actually ends the match. The referee often
+ * calls points for BOTH sides in one stoppage and the operator enters them one
+ * after the other — the first entry may touch the 8-point gap even though the
+ * second entry (the other side's point) immediately un-touches it. Scoring
+ * stays open during the window; it only becomes a win if the gap still holds
+ * when the window runs out. 0 = decide instantly, as before.
+ */
+export const DEFAULT_WIN_GRACE_SEC = 15;
+
 const other = (side: Side): Side => (side === 'ao' ? 'aka' : 'ao');
+
+/**
+ * What a score change does to the 8-point-gap rule: at or over the margin it
+ * arms (or re-arms) the grace window rather than deciding at once — the other
+ * side's point from the same call may still be on its way in. Back under the
+ * margin it disarms. With no grace configured it decides immediately.
+ */
+function gapWinPatch(
+  scoreAo: number,
+  scoreAka: number,
+  s: { winGraceSec: number; pendingWinUntil: number | null }
+): Partial<MatchState> {
+  if (Math.abs(scoreAo - scoreAka) >= WIN_MARGIN) {
+    if (s.winGraceSec <= 0) {
+      return {
+        winner: scoreAo > scoreAka ? 'ao' : 'aka',
+        winReason: 'points',
+        running: false,
+        endsAt: null,
+        pendingWinUntil: null,
+      };
+    }
+    return { pendingWinUntil: Date.now() + s.winGraceSec * 1000 };
+  }
+  return s.pendingWinUntil != null ? { pendingWinUntil: null } : {};
+}
 
 /** How many strikes of each value a side landed, richest first: [#3, #2, #1]. */
 export function tallyStrikes(log: readonly number[]): number[] {
@@ -98,6 +134,10 @@ interface MatchState {
   pointNotice: PointNotice | null; // transient "Point 3" callout
   pointNoticeUntil: number | null;
   pointNoticeSec: number;
+  // The 8-point gap has been reached: epoch ms when it turns into a win unless
+  // the gap drops below 8 first (the other side's point of the same call).
+  pendingWinUntil: number | null;
+  winGraceSec: number;
 
   addPoint: (side: Side, n: number) => void;
   setScore: (side: Side, val: number) => void;
@@ -111,6 +151,9 @@ interface MatchState {
   setFoulNoticeSec: (sec: number) => void;
   clearFoulNotice: () => void;
   setPointNoticeSec: (sec: number) => void;
+  setWinGraceSec: (sec: number) => void;
+  /** Turn an expired pending 8-point gap into the win (force skips the clock). */
+  finalizePendingWin: (force?: boolean) => void;
   /** Record the flags the judges raised; a majority settles the match. */
   castFlagVote: (vote: FlagVote) => void;
   clearFlagVote: () => void;
@@ -159,6 +202,8 @@ export const useMatchStore = create<MatchState>((set) => ({
   pointNotice: null,
   pointNoticeUntil: null,
   pointNoticeSec: DEFAULT_POINT_NOTICE_SEC,
+  pendingWinUntil: null,
+  winGraceSec: DEFAULT_WIN_GRACE_SEC,
 
   addPoint: (side, n) =>
     set((s) => {
@@ -193,13 +238,7 @@ export const useMatchStore = create<MatchState>((set) => ({
         patch.pointNotice = { side, n };
         patch.pointNoticeUntil = Date.now() + s.pointNoticeSec * 1000;
       }
-      // An 8-point lead wins immediately.
-      if (Math.abs(scoreAo - scoreAka) >= WIN_MARGIN) {
-        patch.winner = scoreAo > scoreAka ? 'ao' : 'aka';
-        patch.winReason = 'points';
-        patch.running = false;
-        patch.endsAt = null;
-      }
+      Object.assign(patch, gapWinPatch(scoreAo, scoreAka, s));
       return patch;
     }),
 
@@ -212,13 +251,25 @@ export const useMatchStore = create<MatchState>((set) => ({
       const scoreAo = side === 'ao' ? next : s.scoreAo;
       const scoreAka = side === 'aka' ? next : s.scoreAka;
       const patch: Partial<MatchState> = { [key]: next };
-      if (Math.abs(scoreAo - scoreAka) >= WIN_MARGIN) {
-        patch.winner = scoreAo > scoreAka ? 'ao' : 'aka';
-        patch.winReason = 'points';
-        patch.running = false;
-        patch.endsAt = null;
-      }
+      Object.assign(patch, gapWinPatch(scoreAo, scoreAka, s));
       return patch;
+    }),
+
+  setWinGraceSec: (sec) =>
+    set({ winGraceSec: Math.min(60, Math.max(0, Math.round(sec))) }),
+
+  finalizePendingWin: (force = false) =>
+    set((s) => {
+      if (s.winner || s.pendingWinUntil == null) return {};
+      if (!force && Date.now() < s.pendingWinUntil) return {};
+      if (Math.abs(s.scoreAo - s.scoreAka) < WIN_MARGIN) return { pendingWinUntil: null };
+      return {
+        pendingWinUntil: null,
+        winner: s.scoreAo > s.scoreAka ? 'ao' : 'aka',
+        winReason: 'points',
+        running: false,
+        endsAt: null,
+      };
     }),
 
   resetScores: () =>
@@ -237,6 +288,7 @@ export const useMatchStore = create<MatchState>((set) => ({
       foulNoticeUntil: null,
       pointNotice: null,
       pointNoticeUntil: null,
+      pendingWinUntil: null,
     }),
 
   toggleSenshu: (side) =>
@@ -282,6 +334,7 @@ export const useMatchStore = create<MatchState>((set) => ({
         patch.winReason = 'fouls';
         patch.running = false;
         patch.endsAt = null;
+        patch.pendingWinUntil = null;
       }
       return patch;
     }),
@@ -331,6 +384,7 @@ export const useMatchStore = create<MatchState>((set) => ({
       winReason: null,
       needsDecision: false,
       flagVote: null,
+      pendingWinUntil: null,
     }),
 
   // Recompute the remaining seconds from the absolute deadline. Driven by a
@@ -361,7 +415,15 @@ export const useMatchStore = create<MatchState>((set) => ({
             needsDecision = true;
           }
         }
-        return { seconds: 0, running: false, endsAt: null, winner, winReason, needsDecision };
+        return {
+          seconds: 0,
+          running: false,
+          endsAt: null,
+          winner,
+          winReason,
+          needsDecision,
+          pendingWinUntil: null,
+        };
       }
       return { seconds: remaining };
     }),
@@ -392,6 +454,7 @@ export const useMatchStore = create<MatchState>((set) => ({
       winReason: null,
       needsDecision: false,
       flagVote: null,
+      pendingWinUntil: null,
     })),
   onResetAll: () =>
     set((s) => ({
@@ -413,6 +476,7 @@ export const useMatchStore = create<MatchState>((set) => ({
       foulNoticeUntil: null,
       pointNotice: null,
       pointNoticeUntil: null,
+      pendingWinUntil: null,
     })),
   setCategory: (category) => set({ category }),
   setRound: (round) => set({ round }),
