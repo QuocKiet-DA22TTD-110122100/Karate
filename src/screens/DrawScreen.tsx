@@ -22,6 +22,7 @@ import {
   normalizeUnit,
   categoryKey,
   categoryLabel,
+  compareClassLabels,
 } from '../lib/normalize';
 import { extractRowsFromPdf } from '../lib/pdf';
 import { loadDraw, saveDraw, type DrawState } from '../lib/drawStorage';
@@ -354,7 +355,7 @@ export default function DrawScreen() {
         }
       }
       const list = [...map.values()];
-      list.sort((a, b) => a.label.localeCompare(b.label));
+      list.sort((a, b) => compareClassLabels(a.label, b.label));
       for (const c of list) c.athletes = c.athletes.map((a, i) => ({ ...a, stt: i + 1 }));
       return list;
     });
@@ -412,7 +413,7 @@ export default function DrawScreen() {
           benches: { ...s.benches, ...newBenches },
         }),
       });
-      drawnClasses.sort((a, b) => a.localeCompare(b, 'vi'));
+      drawnClasses.sort(compareClassLabels);
     }
 
     // Report on this file alone, not the accumulated roster.
@@ -427,7 +428,7 @@ export default function DrawScreen() {
       athleteCount: incoming.length,
       classes: [...perClass.entries()]
         .map(([label, count]) => ({ label, count }))
-        .sort((a, b) => a.label.localeCompare(b.label, 'vi')),
+        .sort((a, b) => compareClassLabels(a.label, b.label)),
       drawnClasses,
     };
   }, []);
@@ -873,7 +874,7 @@ export default function DrawScreen() {
       const label = categoryLabel(weight, age, gender);
       const newCat: CategoryInfo = { key, label, athletes: [] };
       setCategories((cats) =>
-        [...cats, newCat].sort((a, b) => a.label.localeCompare(b.label, 'vi'))
+        [...cats, newCat].sort((a, b) => compareClassLabels(a.label, b.label))
       );
       setActiveKey(key);
       setEditingRoster([]);
@@ -960,7 +961,7 @@ export default function DrawScreen() {
         }
       }
       const list = [...map.values()];
-      list.sort((a, b) => a.label.localeCompare(b.label, 'vi'));
+      list.sort((a, b) => compareClassLabels(a.label, b.label));
       for (const c of list) c.athletes = c.athletes.map((a, i) => ({ ...a, stt: i + 1 }));
       return list;
     });

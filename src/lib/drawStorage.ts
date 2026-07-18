@@ -1,6 +1,6 @@
 import type { AthleteRecord, CategoryInfo, RosterEntry } from '../types';
 import type { BracketData } from './drawAlgorithm';
-import { categoryLabel } from './normalize';
+import { categoryLabel, compareClassLabels } from './normalize';
 
 /**
  * The draw (imported roster + drawn/edited brackets), mirrored to localStorage.
@@ -40,7 +40,11 @@ function relabel(state: Partial<DrawState>): Partial<DrawState> {
   };
   return {
     ...state,
-    categories: state.categories?.map((c) => ({ ...c, label: labelFor(c.key) })),
+    // Also re-sort on load, so draws saved under an older ordering pick up the
+    // competition-schedule order without needing a fresh import.
+    categories: state.categories
+      ?.map((c) => ({ ...c, label: labelFor(c.key) }))
+      .sort((a, b) => compareClassLabels(a.label, b.label)),
     brackets: state.brackets
       ? Object.fromEntries(
           Object.entries(state.brackets).map(([key, b]) => [

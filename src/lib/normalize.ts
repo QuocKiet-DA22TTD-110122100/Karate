@@ -138,6 +138,32 @@ export function categoryKey(weight: string, ageGroup: string, gender: string): s
 }
 
 /**
+ * Competition-schedule order for class labels: age group ascending (7-9 before
+ * 10-11), then Nữ before Nam (matching the official schedule), then weight
+ * ascending with the open class right after its base ("42kg" < "42kg+").
+ * Unparsable parts sort last; ties fall back to alphabetical so the order stays
+ * total and stable.
+ */
+export function compareClassLabels(a: string, b: string): number {
+  const pa = parseClass(a);
+  const pb = parseClass(b);
+
+  const age = (p: ParsedClass) =>
+    p.ageGroup ? parseInt(p.ageGroup, 10) : Number.MAX_SAFE_INTEGER;
+  if (age(pa) !== age(pb)) return age(pa) - age(pb);
+
+  const gender = (p: ParsedClass) => (p.gender === 'Nữ' ? 0 : p.gender === 'Nam' ? 1 : 2);
+  if (gender(pa) !== gender(pb)) return gender(pa) - gender(pb);
+
+  const kg = (p: ParsedClass) => (p.weight ? parseInt(p.weight, 10) : Number.MAX_SAFE_INTEGER);
+  if (kg(pa) !== kg(pb)) return kg(pa) - kg(pb);
+  const open = (p: ParsedClass) => (p.weight.endsWith('+') ? 1 : 0);
+  if (open(pa) !== open(pb)) return open(pa) - open(pb);
+
+  return a.localeCompare(b, 'vi');
+}
+
+/**
  * The class as it reads on the board, the roster and the printed sheet:
  * "Hạng cân 22kg - Lứa tuổi 7-9 - Nam".
  *
