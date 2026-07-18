@@ -19,7 +19,7 @@ export default function ScorePanel({ side, interactive = true }: ScorePanelProps
       <div className={`relative grid h-80 w-64 place-items-center rounded ${bg}`}>
         <span className="text-[13rem] font-black leading-none text-white">{score}</span>
         {hasSenshu && (
-          <span className="absolute bottom-2 right-2 grid h-12 w-14 place-items-center rounded bg-senshu text-xl font-bold text-black">
+          <span className="absolute bottom-2 right-2 grid h-12 w-16 place-items-center rounded-xl bg-gradient-to-b from-[#4cc76d] to-[#2b8f4c] text-xl font-extrabold tracking-wider text-white shadow-[0_3px_10px_rgba(0,0,0,0.45)] ring-2 ring-white/50">
             VR
           </span>
         )}

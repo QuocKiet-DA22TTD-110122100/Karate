@@ -67,7 +67,7 @@ function MiniScore({ side }: { side: Side }) {
     <div className={`relative grid h-16 w-16 place-items-center rounded ${bg}`}>
       <span className="text-4xl font-light text-white">{score}</span>
       {hasSenshu && (
-        <span className="absolute bottom-0.5 right-0.5 rounded-sm bg-senshu px-1 text-[7px] font-bold text-black">
+        <span className="absolute bottom-0.5 right-0.5 rounded bg-gradient-to-b from-[#4cc76d] to-[#2b8f4c] px-1 text-[7px] font-bold text-white ring-1 ring-white/50">
           VR
         </span>
       )}
