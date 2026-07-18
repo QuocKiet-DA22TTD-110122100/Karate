@@ -9,7 +9,7 @@ export default {
         aka: '#e01f1f',
         draw: '#8ed89a',
         timer: '#f2c230',
-        senshu: '#34a853',
+        senshu: '#d4a017',
         warning: '#4a4aff',
       },
     },

@@ -107,7 +107,7 @@ interface MatchState {
   aka: Competitor;
   scoreAo: number;
   scoreAka: number;
-  senshu: Side | null; // green "VR" badge — awarded by hand, never automatic
+  senshu: Side | null; // dark-yellow "VR" badge — awarded by hand, never automatic
   penalties: Record<Side, string[]>;
   warning: boolean; // center "warning" indicator
   seconds: number;

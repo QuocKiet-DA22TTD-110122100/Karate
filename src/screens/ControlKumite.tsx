@@ -310,7 +310,7 @@ function SideConsole(props: Readonly<{ side: Side }>) {
           disabled={vrReason !== null}
           title={vrReason ?? `VR — phím ${VR_KEYS[side]}`}
           className={`relative grid h-11 w-14 place-items-center rounded-lg text-base font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
-            senshu ? 'bg-senshu text-white' : 'border-2 border-senshu text-senshu'
+            senshu ? 'bg-senshu text-black' : 'border-2 border-senshu text-senshu'
           }`}
         >
           <KeyHint>{VR_KEYS[side]}</KeyHint>
