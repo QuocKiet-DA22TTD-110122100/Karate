@@ -197,12 +197,15 @@ function Slot({
       {/* flex-1 stretches the white label across the whole bar: html2canvas (PDF
           export) draws text wider than the browser, so a text-hugging box would
           let the tail of long names spill onto the gradient. min-width:auto still
-          lets it grow past the bar if a name is longer than LINE_W. */}
+          lets it grow past the bar if a name is longer than LINE_W.
+          paddingBottom keeps white slack under the text: html2canvas also draws
+          text a few px lower than the browser, so without it names sit on the
+          label's bottom edge in the PDF. */}
       <span
         className={`mx-1 flex-1 whitespace-nowrap rounded-sm border border-black/10 px-1 text-[13px] font-semibold text-black ${
           highlight ? 'bg-yellow-300' : 'bg-white/90'
         }`}
-        style={{ lineHeight: `${TEXT_LH}px` }}
+        style={{ lineHeight: `${TEXT_LH}px`, paddingBottom: 5 }}
       >
         {athlete.name}
         <span className="font-normal text-gray-600"> ({athlete.unit})</span>
